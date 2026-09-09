@@ -49,15 +49,14 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
     }
 
     .sidebar-brand {
-        padding: 24px 20px;
+        padding: 20px;
         display: flex;
+        justify-content: center;
         align-items: center;
-        gap: 12px;
         border-bottom: 1px solid var(--border);
     }
 
-    .sidebar-brand img { height: 36px; object-fit: contain; }
-    .sidebar-brand span { font-weight: 700; font-size: 18px; color: var(--text-dark); }
+    .sidebar-brand img { height: 50px; max-width: 100%; object-fit: contain; }
 
     .sidebar-nav {
         flex: 1;
@@ -213,7 +212,6 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
         <img src="images/logo.png" alt="BookWagon">
-        <span>BookWagon</span>
     </div>
 
     <nav class="sidebar-nav">
@@ -248,10 +246,6 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
         <a href="seller_account.php" class="nav-item <?php echo ($currentPage === 'seller_account.php' || $currentPage === 'seller_settings.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-gear"></i>
             Settings
-        </a>
-        <a href="home.php" class="nav-item" style="margin-top: auto; border-top: 1px solid var(--border); padding-top: 15px; color: #dc2626;">
-            <i class="fa-solid fa-store"></i>
-            Switch to Buyer Mode
         </a>
     </nav>
 
@@ -295,7 +289,7 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
         <h4 class="mb-0 fw-bold" style="font-size: 18px; color: var(--text-dark);">Seller Portal</h4>
     </div>
     <div class="topbar-right">
-        <a href="home.php" class="btn btn-outline-warning btn-sm fw-semibold d-flex align-items-center gap-2" style="border-color: var(--primary-orange); color: var(--primary-orange); border-radius: 20px; padding: 6px 16px; font-size: 13px; text-decoration: none;">
+        <a href="home.php" class="nav-link fw-semibold d-flex align-items-center gap-2 me-3" style="font-size: 14px; color: var(--primary-orange); text-decoration: none;">
             <i class="fa-solid fa-store"></i>
             <span class="d-none d-sm-inline">Switch to Buyer Mode</span>
             <span class="d-sm-none">Shop</span>

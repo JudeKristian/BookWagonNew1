@@ -48,7 +48,10 @@ function ensure_pricing_fields_exist($conn) {
         'condition_multiplier' => 'DECIMAL(5,2) DEFAULT NULL',
         'book_value' => 'DECIMAL(10,2) DEFAULT NULL',
         'listing_fee' => 'DECIMAL(10,2) DEFAULT NULL',
-        'markup_percentage' => 'INT DEFAULT NULL'
+        'markup_percentage' => 'INT DEFAULT NULL',
+        'listing_type' => "ENUM('both', 'sale', 'rent') DEFAULT 'both'",
+        'security_deposit' => 'DECIMAL(10,2) DEFAULT 0.00',
+        'seller_note' => 'TEXT DEFAULT NULL'
     ];
     
     // Check if fields exist
@@ -65,6 +68,20 @@ function ensure_pricing_fields_exist($conn) {
             error_log("Added field $field to books table");
         }
     }
+
+    // Ensure genre and theme are wide enough for multi-tags
+    @$conn->query("ALTER TABLE books MODIFY COLUMN genre VARCHAR(255) DEFAULT ''");
+    @$conn->query("ALTER TABLE books MODIFY COLUMN theme VARCHAR(255) DEFAULT ''");
+
+    // Ensure book_images table exists for Shopee-style condition photos
+    @$conn->query("CREATE TABLE IF NOT EXISTS book_images (
+        image_id INT AUTO_INCREMENT PRIMARY KEY,
+        book_id INT NOT NULL,
+        image_url VARCHAR(255) NOT NULL,
+        image_type VARCHAR(50) DEFAULT 'additional',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_book (book_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
 }
 
 // Call the function to ensure fields exist
@@ -78,61 +95,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Add new book
         if ($_POST['action'] === 'add') {
             // Prepare and sanitize the data
-            $title = mysqli_real_escape_string($conn, $_POST['title']);
-            $author = mysqli_real_escape_string($conn, $_POST['author']);
-            $isbn = mysqli_real_escape_string($conn, $_POST['isbn']);
-            $genre = mysqli_real_escape_string($conn, $_POST['genre']);
-            $theme = mysqli_real_escape_string($conn, $_POST['theme']);
-            // Add new fields
-            $book_type = mysqli_real_escape_string($conn, $_POST['book_type']);
-            $condition = mysqli_real_escape_string($conn, $_POST['condition']);
-            $damages = mysqli_real_escape_string($conn, $_POST['damages']);
-            $popularity = mysqli_real_escape_string($conn, $_POST['popularity']);
-            $price = floatval($_POST['price']);
-            $rent_price = floatval($_POST['rent_price']);
-            $stock = intval($_POST['stock']);
-            $description = mysqli_real_escape_string($conn, $_POST['description'] ?? '');
+            $title = mysqli_real_escape_string($conn, trim($_POST['title']));
+            $author = mysqli_real_escape_string($conn, trim($_POST['author']));
+            $isbn = mysqli_real_escape_string($conn, trim($_POST['isbn'] ?? ''));
             
-            // Add debugging to check the description value
-            error_log("Description before DB insert: " . $description);
+            // Multiple genres handling (either array from badges or comma-separated string)
+            if (isset($_POST['genres']) && is_array($_POST['genres'])) {
+                $genre_arr = array_map(function($g) use ($conn) { return mysqli_real_escape_string($conn, trim($g)); }, $_POST['genres']);
+                $genre = implode(', ', array_filter($genre_arr));
+            } else {
+                $genre = mysqli_real_escape_string($conn, trim($_POST['genre'] ?? ''));
+            }
+
+            // Multiple themes handling
+            if (isset($_POST['themes']) && is_array($_POST['themes'])) {
+                $theme_arr = array_map(function($t) use ($conn) { return mysqli_real_escape_string($conn, trim($t)); }, $_POST['themes']);
+                $theme = implode(', ', array_filter($theme_arr));
+            } else {
+                $theme = mysqli_real_escape_string($conn, trim($_POST['theme'] ?? ''));
+            }
+
+            $book_type = mysqli_real_escape_string($conn, $_POST['book_type'] ?? 'Paperback');
+            $condition = mysqli_real_escape_string($conn, $_POST['condition'] ?? 'Good');
+            
+            // Damage tags + damage text
+            $damage_tags = '';
+            if (isset($_POST['damage_tags']) && is_array($_POST['damage_tags'])) {
+                $damage_tags = implode(', ', array_filter($_POST['damage_tags']));
+            }
+            $custom_damages = trim($_POST['damages'] ?? '');
+            if (!empty($damage_tags) && !empty($custom_damages)) {
+                $damages = mysqli_real_escape_string($conn, $damage_tags . ' - ' . $custom_damages);
+            } elseif (!empty($damage_tags)) {
+                $damages = mysqli_real_escape_string($conn, $damage_tags);
+            } else {
+                $damages = mysqli_real_escape_string($conn, $custom_damages);
+            }
+
+            $popularity = mysqli_real_escape_string($conn, $_POST['popularity'] ?? 'New Releases');
+            $listing_type = in_array($_POST['listing_type'] ?? '', ['both', 'sale', 'rent']) ? $_POST['listing_type'] : 'both';
+            
+            $price = floatval($_POST['price'] ?? 0);
+            $rent_price = floatval($_POST['rent_price'] ?? 0);
+            $stock = max(1, intval($_POST['stock'] ?? 1));
+            $description = mysqli_real_escape_string($conn, $_POST['description'] ?? '');
+            $seller_note = mysqli_real_escape_string($conn, $_POST['seller_note'] ?? '');
             
             // Pricing strategy fields
             $base_rental_fee = floatval($_POST['base_rental_fee'] ?? 0);
-            // Override with fixed values regardless of what was submitted
             $handling_fee = 10.00; // Fixed value
             $condition_multiplier = floatval($_POST['condition_multiplier'] ?? 1.0);
             $book_value = floatval($_POST['book_value'] ?? 0);
-            // Override with fixed values regardless of what was submitted
             $listing_fee = 30.00; // Fixed value
             $markup_percentage = 30; // Fixed value
+            $security_deposit = floatval($_POST['security_deposit'] ?? $book_value);
             
-            // Handle image upload
+            // Handle primary cover image upload
             $cover_image = '';
             if (isset($_FILES['cover_image']) && $_FILES['cover_image']['error'] === UPLOAD_ERR_OK) {
-                $uploaded_image = direct_upload_image($_FILES['cover_image']);
+                $uploaded_image = direct_upload_image($_FILES['cover_image'], 'uploads/covers/');
                 if ($uploaded_image) {
-                    $cover_image = $uploaded_image; // Assign the uploaded file path to $cover_image
-                } else {
-                    $error_message = "Error uploading image. Please try again.";
+                    $cover_image = $uploaded_image;
                 }
             }
             
-            // Insert book into database with new fields
-            $query = "INSERT INTO books (user_id, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage) 
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-            // Add this before your INSERT query
-            error_log("Cover image path before DB insert: " . $cover_image);
+            // Insert book into database with all fields
+            $query = "INSERT INTO books (user_id, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage, listing_type, security_deposit, seller_note) 
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             $stmt = $conn->prepare($query);
-            // Ensure proper parameter binding:
-            // i - integer: user_id
-            // s - string: title, author, isbn, genre, theme, book_type, condition, damages, popularity
-            // d - double: price, rent_price
-            // d - double: base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee
-            // i - integer: stock, markup_percentage
-            // s - string: description, cover_image
-            $stmt->bind_param("isssssssssddiisdddddi", 
+            $stmt->bind_param("isssssssssddissddddddsds", 
                 $userId, 
                 $title, 
                 $author, 
@@ -146,22 +178,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $price, 
                 $rent_price, 
                 $stock, 
-                $description, // string for description
+                $description, 
                 $cover_image, 
                 $base_rental_fee, 
                 $handling_fee, 
                 $condition_multiplier, 
                 $book_value, 
                 $listing_fee, 
-                $markup_percentage);
+                $markup_percentage,
+                $listing_type,
+                $security_deposit,
+                $seller_note);
+            
             if ($stmt->execute()) {
-                $success_message = "Book added successfully!";
-                // Redirect to prevent form resubmission on refresh
-                header("Location: manage_books.php?success=add");
-                exit();
-            }
+                $new_book_id = $stmt->insert_id;
+                
+                // Handle Shopee-style additional documentation photos
+                $photo_slots = [
+                    'back_cover' => 'back',
+                    'spine_cover' => 'spine',
+                    'pages_cover' => 'pages',
+                    'damage_cover' => 'damage',
+                    'other_cover' => 'other',
+                    'other_cover_2' => 'other'
+                ];
+                
+                $img_stmt = $conn->prepare("INSERT INTO book_images (book_id, image_url, image_type) VALUES (?, ?, ?)");
+                
+                foreach ($photo_slots as $slot_name => $slot_type) {
+                    if (isset($_FILES[$slot_name]) && $_FILES[$slot_name]['error'] === UPLOAD_ERR_OK) {
+                        $uploaded_extra = direct_upload_image($_FILES[$slot_name], 'uploads/books/');
+                        if ($uploaded_extra && $img_stmt) {
+                            $img_stmt->bind_param("iss", $new_book_id, $uploaded_extra, $slot_type);
+                            $img_stmt->execute();
+                        }
+                    }
+                }
+                if ($img_stmt) {
+                    $img_stmt->close();
+                }
 
-            $stmt->close();
+                $stmt->close();
+                header("Location: Manage_books.php?success=add");
+                exit();
+            } else {
+                $error_message = "Error adding book: " . $stmt->error;
+                $stmt->close();
+            }
         }
         
         // Edit existing book
@@ -230,7 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                   book_value = ?, listing_fee = ?, markup_percentage = ? 
                                   WHERE book_id = ? AND user_id = ?";
                         $stmt = $conn->prepare($query);
-                        $stmt->bind_param("sssssssssddiisdddddiii", $title, $author, $isbn, $genre, $theme, 
+                        $stmt->bind_param("sssssssssddissdddddiii", $title, $author, $isbn, $genre, $theme, 
                                           $book_type, $condition, $damages, $popularity, 
                                           $price, $rent_price, $stock, $description, $cover_image,
                                           $base_rental_fee, $handling_fee, $condition_multiplier,
@@ -309,6 +372,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $delete_order_items_stmt->bind_param("i", $book_id);
                         $delete_order_items_stmt->execute();
                         $delete_order_items_stmt->close();
+
+                        // Also delete related book_images
+                        $delete_images_stmt = $conn->prepare("DELETE FROM book_images WHERE book_id = ?");
+                        if ($delete_images_stmt) {
+                            $delete_images_stmt->bind_param("i", $book_id);
+                            $delete_images_stmt->execute();
+                            $delete_images_stmt->close();
+                        }
                         
                         // Now delete the book
                         $delete_book_query = "DELETE FROM books WHERE book_id = ? AND user_id = ?";
@@ -459,6 +530,259 @@ while ($row = $theme_result->fetch_assoc()) {
         .object-fit-cover {
             object-fit: cover;
         }
+
+        /* Modal Dialog Scroll & Fixed Footer */
+        #addBookModal .modal-dialog-scrollable .modal-content {
+            max-height: calc(100vh - 3.5rem);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #addBookModal .modal-body {
+            overflow-y: auto !important;
+            max-height: calc(100vh - 13rem);
+            scrollbar-width: thin;
+            scrollbar-color: #cbd5e1 #f8fafc;
+        }
+        #addBookModal .modal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+        #addBookModal .modal-body::-webkit-scrollbar-track {
+            background: #f8fafc;
+        }
+        #addBookModal .modal-body::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        #addBookModal .modal-body::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* 3-Step Wizard Navigation */
+        .wizard-steps-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            margin-bottom: 24px;
+            padding: 0 20px;
+        }
+        .wizard-steps-container::before {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 50px;
+            right: 50px;
+            height: 3px;
+            background: #e2e8f0;
+            z-index: 1;
+        }
+        .wizard-step-node {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            outline: none;
+        }
+        .wizard-step-circle {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: #fff;
+            border: 3px solid #cbd5e1;
+            color: #64748b;
+            font-weight: 700;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .wizard-step-node.active .wizard-step-circle {
+            border-color: #f8a100;
+            background: #f8a100;
+            color: #fff;
+            box-shadow: 0 0 0 5px rgba(248, 161, 0, 0.2);
+        }
+        .wizard-step-node.completed .wizard-step-circle {
+            border-color: #10b981;
+            background: #10b981;
+            color: #fff;
+        }
+        .wizard-step-label {
+            margin-top: 6px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #64748b;
+            transition: color 0.2s ease;
+        }
+        .wizard-step-node.active .wizard-step-label {
+            color: #d97706;
+        }
+        .wizard-step-node.completed .wizard-step-label {
+            color: #059669;
+        }
+
+        /* Shopee-style Photo Upload Grid */
+        .photo-upload-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+            gap: 14px;
+        }
+        .photo-slot {
+            aspect-ratio: 3/4;
+            border: 2px dashed #cbd5e1;
+            border-radius: 10px;
+            background: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            overflow: hidden;
+            padding: 8px;
+            text-align: center;
+        }
+        .photo-slot:hover {
+            border-color: #f8a100;
+            background: #fffbeb;
+        }
+        .photo-slot.has-image {
+            border-style: solid;
+            border-color: #e2e8f0;
+            padding: 0;
+            background: #000;
+        }
+        .photo-slot-preview {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none;
+        }
+        .photo-slot.has-image .photo-slot-preview {
+            display: block;
+        }
+        .photo-slot.has-image .photo-slot-placeholder {
+            display: none;
+        }
+        .photo-slot-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 4;
+        }
+        .photo-slot:hover .photo-slot-overlay {
+            opacity: 1;
+        }
+        .photo-slot-badge {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 3px 7px;
+            border-radius: 5px;
+            z-index: 3;
+            letter-spacing: 0.3px;
+        }
+        .badge-primary-cover {
+            background: #f8a100;
+            color: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+        }
+        .badge-extra-photo {
+            background: rgba(15, 23, 42, 0.7);
+            color: #fff;
+        }
+        .photo-slot-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #475569;
+            margin-top: 6px;
+            line-height: 1.2;
+        }
+
+        /* Tag Pills (Genre, Theme, Damages) */
+        .tag-pills-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .tag-pill {
+            padding: 6px 13px;
+            font-size: 0.82rem;
+            border-radius: 20px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #475569;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            user-select: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .tag-pill:hover {
+            border-color: #cbd5e1;
+            background: #e2e8f0;
+        }
+        .tag-pill.active {
+            background: #fff7ed;
+            border-color: #f97316;
+            color: #c2410c;
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(249, 115, 22, 0.15);
+        }
+
+        /* Listing Mode Cards */
+        .listing-mode-group {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        .listing-mode-card {
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 14px 10px;
+            text-align: center;
+            cursor: pointer;
+            background: #fff;
+            transition: all 0.2s ease;
+        }
+        .listing-mode-card:hover {
+            border-color: #cbd5e1;
+        }
+        .listing-mode-card.active {
+            border-color: #f8a100;
+            background: #fffbeb;
+            box-shadow: 0 4px 12px rgba(248, 161, 0, 0.12);
+        }
+        .listing-mode-card i {
+            font-size: 1.4rem;
+            margin-bottom: 6px;
+            display: block;
+        }
+        .pricing-section-box {
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 16px;
+            background: #ffffff;
+            margin-bottom: 16px;
+        }
     </style>
 </head>
 <body>
@@ -568,8 +892,20 @@ while ($row = $theme_result->fetch_assoc()) {
                                                             <?php echo htmlspecialchars($book['condition'] ?? 'New'); ?>
                                                         <?php endif; ?>
                                                     </td>
-                                                    <td>₱<?php echo number_format($book['price'], 2); ?></td>
-                                                    <td>₱<?php echo number_format($book['rent_price'] ?? 0, 2); ?></td>
+                                                    <td>
+                                                        <?php if (($book['listing_type'] ?? 'both') === 'rent'): ?>
+                                                            <span class="badge bg-light text-muted border">Rent Only</span>
+                                                        <?php else: ?>
+                                                            ₱<?php echo number_format($book['price'], 2); ?>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td>
+                                                        <?php if (($book['listing_type'] ?? 'both') === 'sale'): ?>
+                                                            <span class="badge bg-light text-muted border">Sale Only</span>
+                                                        <?php else: ?>
+                                                            ₱<?php echo number_format($book['rent_price'] ?? 0, 2); ?>/wk
+                                                        <?php endif; ?>
+                                                    </td>
                                                     <td>
                                                         <?php if ($book['stock'] <= 5): ?>
                                                             <span class="text-danger"><?php echo $book['stock']; ?></span>
@@ -688,8 +1024,16 @@ while ($row = $theme_result->fetch_assoc()) {
                                                     
                                                     <div class="d-flex justify-content-between align-items-center mt-2">
                                                         <div>
-                                                            <p class="mb-0 fw-bold">₱<?php echo number_format($book['price'], 2); ?></p>
-                                                            <small class="text-muted">Rent: ₱<?php echo number_format($book['rent_price'] ?? 0, 2); ?>/wk</small>
+                                                            <?php if (($book['listing_type'] ?? 'both') === 'rent'): ?>
+                                                                <p class="mb-0 fw-bold text-primary">Rent: ₱<?php echo number_format($book['rent_price'] ?? 0, 2); ?>/wk</p>
+                                                                <small class="badge bg-light text-muted border">For Rent Only</small>
+                                                            <?php elseif (($book['listing_type'] ?? 'both') === 'sale'): ?>
+                                                                <p class="mb-0 fw-bold text-success">₱<?php echo number_format($book['price'], 2); ?></p>
+                                                                <small class="badge bg-light text-muted border">For Sale Only</small>
+                                                            <?php else: ?>
+                                                                <p class="mb-0 fw-bold text-dark">₱<?php echo number_format($book['price'], 2); ?></p>
+                                                                <small class="text-muted">Rent: ₱<?php echo number_format($book['rent_price'] ?? 0, 2); ?>/wk</small>
+                                                            <?php endif; ?>
                                                         </div>
                                                         <div>
                                                             <span class="badge <?php echo $book['stock'] > 0 ? 'bg-success' : 'bg-danger'; ?>">
@@ -728,166 +1072,497 @@ while ($row = $theme_result->fetch_assoc()) {
         </div>
     </div>
     
-    <!-- Add Book Modal -->
-    <div class="modal fade" id="addBookModal" tabindex="-1" aria-labelledby="addBookModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="addBookModalLabel">Add New Book</h5>
+    <!-- Add Book Modal (3-Step Wizard) -->
+    <div class="modal fade" id="addBookModal" tabindex="-1" aria-labelledby="addBookModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <form id="addBookForm" action="Manage_books.php" method="POST" enctype="multipart/form-data" class="modal-content">
+                <input type="hidden" name="action" value="add">
+                <input type="hidden" name="popularity" value="New Releases">
+
+                <div class="modal-header border-bottom py-3 flex-shrink-0">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3 d-flex align-items-center justify-content-center rounded-circle" style="width: 40px; height: 40px; background: #fff7ed; color: #f97316;">
+                            <i class="fa-solid fa-book-medical fs-5"></i>
+                        </div>
+                        <div>
+                            <h5 class="modal-title fw-bold text-dark mb-0" id="addBookModalLabel">Add New Book to Inventory</h5>
+                            <small class="text-muted">Create a detailed listing for selling, renting, or both</small>
+                        </div>
+                    </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <form action="manage_books.php" method="POST" enctype="multipart/form-data">
-                    <input type="hidden" name="action" value="add">
-                    <div class="modal-body">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label for="title" class="form-label">Title</label>
-                                    <input type="text" class="form-control" id="title" name="title" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="author" class="form-label">Author</label>
-                                    <input type="text" class="form-control" id="author" name="author" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="isbn" class="form-label">ISBN</label>
-                                    <input type="text" class="form-control" id="isbn" name="isbn" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="genre" class="form-label">Genre</label>
-                                    <select class="form-select" id="genre" name="genre" required onchange="updateThemeOptions('genre', 'theme')">
-                                        <option value="">Select Genre</option>
-                                        <option value="Fiction">Fiction</option>
-                                        <option value="Non-Fiction">Non-Fiction</option>
-                                    </select>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="theme" class="form-label">Theme</label>
-                                    <select class="form-select" id="theme" name="theme" required disabled>
-                                        <option value="">Select Genre First</option>
-                                    </select>
-                                </div>
-                                <!-- New Field: Book Type -->
-                                <div class="mb-3">
-                                    <label for="book_type" class="form-label">Book Type</label>
-                                    <select class="form-select" id="book_type" name="book_type" required>
-                                        <option value="Paperback">Paperback</option>
-                                        <option value="Hardcover">Hardcover</option>
-                                        <option value="E-book">E-book</option>
-                                        <option value="Audiobook">Audiobook</option>
-                                    </select>
-                                </div>
+                
+                <div class="modal-body p-4" style="overflow-y: auto; max-height: calc(88vh - 130px);">
+                        <!-- Step Progress Indicator -->
+                        <div class="wizard-steps-container">
+                            <div class="wizard-step-node active" id="stepNode1" onclick="jumpToWizardStep(1)">
+                                <div class="wizard-step-circle">1</div>
+                                <div class="wizard-step-label">1. Book Details</div>
                             </div>
-                            <div class="col-md-6">
-                                <!-- New Field: Condition -->
-                                <div class="mb-3">
-                                    <label for="condition" class="form-label">Condition</label>
-                                    <select class="form-select" id="condition" name="condition" required onchange="updateConditionMultiplier(); calculatePrices();">
-                                        <option value="New">New</option>
-                                        <option value="Like New">Like New</option>
-                                        <option value="Very Good">Very Good</option>
-                                        <option value="Good">Good</option>
-                                        <option value="Fair">Fair</option>
-                                        <option value="Poor">Poor</option>
-                                    </select>
-                                </div>
-                                <!-- New Field: Damages -->
-                                <div class="mb-3">
-                                    <label for="damages" class="form-label">Damages (if any)</label>
-                                    <textarea class="form-control" id="damages" name="damages" rows="2" placeholder="Describe any damages or defects..."></textarea>
+                            <div class="wizard-step-node" id="stepNode2" onclick="jumpToWizardStep(2)">
+                                <div class="wizard-step-circle">2</div>
+                                <div class="wizard-step-label">2. Photos & Condition</div>
+                            </div>
+                            <div class="wizard-step-node" id="stepNode3" onclick="jumpToWizardStep(3)">
+                                <div class="wizard-step-circle">3</div>
+                                <div class="wizard-step-label">3. Pricing & Stock</div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 1: Book Information -->
+                        <div class="wizard-step-content" id="wizardStep1">
+                            <div class="row g-3">
+                                <div class="col-md-7">
+                                    <div class="mb-3">
+                                        <label for="title" class="form-label fw-semibold">Book Title <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control form-control-lg fs-6" id="title" name="title" placeholder="e.g. Atomic Habits, The Midnight Library" required>
+                                    </div>
+                                    <div class="row g-2 mb-3">
+                                        <div class="col-md-7">
+                                            <label for="author" class="form-label fw-semibold">Author(s) <span class="text-danger">*</span></label>
+                                            <input type="text" class="form-control" id="author" name="author" placeholder="e.g. James Clear" required>
+                                        </div>
+                                        <div class="col-md-5">
+                                            <label for="isbn" class="form-label fw-semibold">ISBN <small class="text-muted fw-normal">(Optional)</small></label>
+                                            <input type="text" class="form-control" id="isbn" name="isbn" placeholder="e.g. 9780593189641">
+                                        </div>
+                                    </div>
+                                    <div class="row g-2 mb-3">
+                                        <div class="col-md-6">
+                                            <label for="book_type" class="form-label fw-semibold">Format / Book Type <span class="text-danger">*</span></label>
+                                            <select class="form-select" id="book_type" name="book_type" required>
+                                                <option value="Paperback" selected>Paperback</option>
+                                                <option value="Hardcover">Hardcover</option>
+                                                <option value="E-book">E-book</option>
+                                                <option value="Audiobook">Audiobook</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="language" class="form-label fw-semibold">Language</label>
+                                            <select class="form-select" id="language" name="language">
+                                                <option value="English" selected>English</option>
+                                                <option value="Filipino">Filipino / Tagalog</option>
+                                                <option value="Bilingual">Bilingual (English/Filipino)</option>
+                                                <option value="Other">Other</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="description" class="form-label fw-semibold">Synopsis & Book Summary <span class="text-danger">*</span></label>
+                                        <textarea class="form-control" id="description" name="description" rows="4" placeholder="Briefly describe what this book is about..." required></textarea>
+                                    </div>
                                 </div>
                                 
-                                <!-- Pricing Strategy Fields -->
-                                <div class="card mb-3">
-                                    <div class="card-header bg-light">
-                                        <h6 class="mb-0">Pricing Strategy</h6>
+                                <div class="col-md-5">
+                                    <div class="p-3 bg-light rounded-3 border mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <label class="form-label fw-bold mb-0 text-dark">
+                                                <i class="fa-solid fa-tags text-warning me-1"></i> Genres <small class="text-muted fw-normal">(Select multiple)</small>
+                                            </label>
+                                            <span class="badge bg-secondary" id="selectedGenreCount">0 selected</span>
+                                        </div>
+                                        <p class="small text-muted mb-2">Click all tags that describe this book:</p>
+                                        <div class="tag-pills-wrap" id="genrePillsContainer">
+                                            <?php 
+                                            $popular_genres = [
+                                                'Fiction', 'Non-Fiction', 'Fantasy', 'Sci-Fi', 'Mystery', 
+                                                'Thriller', 'Romance', 'Self-Help', 'Business', 'History', 
+                                                'Biography', 'Psychology', 'Horror', 'Adventure', 'Cookbooks', 'Education'
+                                            ];
+                                            foreach ($popular_genres as $g): 
+                                            ?>
+                                                <span class="tag-pill" data-type="genre" data-val="<?php echo htmlspecialchars($g); ?>" onclick="toggleTagPill(this)">
+                                                    <i class="fa-solid fa-plus tag-icon"></i> <?php echo htmlspecialchars($g); ?>
+                                                </span>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <div class="input-group input-group-sm mt-2">
+                                            <input type="text" class="form-control" id="customGenreInput" placeholder="Add custom genre...">
+                                            <button class="btn btn-outline-secondary" type="button" onclick="addCustomTag('genre')">Add</button>
+                                        </div>
+                                        <!-- Hidden container where checked inputs will live -->
+                                        <div id="hiddenGenresContainer"></div>
                                     </div>
-                                    <div class="card-body">
-                                        <!-- Rental Pricing Fields -->
-                                        <h6>Rental Pricing</h6>
-                                        <div class="row mb-2">
-                                            <div class="col-md-6">
-                                                <label for="base_rental_fee" class="form-label">Base Rental Fee (₱)</label>
-                                                <input type="number" class="form-control" id="base_rental_fee" name="base_rental_fee" step="0.01" min="0" value="50" onchange="calculatePrices()">
+
+                                    <div class="p-3 bg-light rounded-3 border">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <label class="form-label fw-bold mb-0 text-dark">
+                                                <i class="fa-solid fa-bookmark text-warning me-1"></i> Themes & Tropes <small class="text-muted fw-normal">(Optional)</small>
+                                            </label>
+                                            <span class="badge bg-secondary" id="selectedThemeCount">0 selected</span>
+                                        </div>
+                                        <div class="tag-pills-wrap" id="themePillsContainer">
+                                            <?php 
+                                            $popular_themes = [
+                                                'Young Adult', 'Personal Growth', 'Classic', 'Dystopian', 
+                                                'Academic', 'Leadership', 'Memoir', 'Contemporary', 'True Crime', 'Philosophy'
+                                            ];
+                                            foreach ($popular_themes as $t): 
+                                            ?>
+                                                <span class="tag-pill" data-type="theme" data-val="<?php echo htmlspecialchars($t); ?>" onclick="toggleTagPill(this)">
+                                                    <i class="fa-solid fa-plus tag-icon"></i> <?php echo htmlspecialchars($t); ?>
+                                                </span>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <div class="input-group input-group-sm mt-2">
+                                            <input type="text" class="form-control" id="customThemeInput" placeholder="Add custom theme...">
+                                            <button class="btn btn-outline-secondary" type="button" onclick="addCustomTag('theme')">Add</button>
+                                        </div>
+                                        <!-- Hidden container where checked theme inputs will live -->
+                                        <div id="hiddenThemesContainer"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 2: Photos & Condition Documentation -->
+                        <div class="wizard-step-content" id="wizardStep2" style="display: none;">
+                            <!-- Shopee-Style Photo Upload Section -->
+                            <div class="mb-4">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div>
+                                        <h6 class="fw-bold mb-0 text-dark">
+                                            <i class="fa-solid fa-camera text-warning me-1"></i> Book Condition Photos (Shopee Style)
+                                        </h6>
+                                        <small class="text-muted">High quality photos prove book condition and protect both seller & renter</small>
+                                    </div>
+                                    <span class="badge bg-warning text-dark"><i class="fa-solid fa-shield-halved me-1"></i> Dispute Protection</span>
+                                </div>
+
+                                <div class="photo-upload-grid">
+                                    <!-- Slot 1: Front Cover (Primary) -->
+                                    <div class="photo-slot" id="slot_cover" onclick="triggerFileInput('file_cover')">
+                                        <span class="photo-slot-badge badge-primary-cover">★ Front Cover *</span>
+                                        <img src="" alt="Front Cover" class="photo-slot-preview" id="preview_cover">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-image fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Front Cover</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Main Photo</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_cover')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('cover', 'file_cover')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_cover" name="cover_image" accept="image/*" onchange="handlePhotoUpload(this, 'cover')" required>
+                                    </div>
+
+                                    <!-- Slot 2: Back Cover -->
+                                    <div class="photo-slot" id="slot_back" onclick="triggerFileInput('file_back')">
+                                        <span class="photo-slot-badge badge-extra-photo">Back Cover</span>
+                                        <img src="" alt="Back Cover" class="photo-slot-preview" id="preview_back">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-book fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Back Cover</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Barcode/Blurb</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_back')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('back', 'file_back')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_back" name="back_cover" accept="image/*" onchange="handlePhotoUpload(this, 'back')">
+                                    </div>
+
+                                    <!-- Slot 3: Spine & Binding -->
+                                    <div class="photo-slot" id="slot_spine" onclick="triggerFileInput('file_spine')">
+                                        <span class="photo-slot-badge badge-extra-photo">Spine & Binding</span>
+                                        <img src="" alt="Spine" class="photo-slot-preview" id="preview_spine">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-lines-leaning fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Spine / Binding</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Creases check</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_spine')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('spine', 'file_spine')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_spine" name="spine_cover" accept="image/*" onchange="handlePhotoUpload(this, 'spine')">
+                                    </div>
+
+                                    <!-- Slot 4: Inside Pages & Edges -->
+                                    <div class="photo-slot" id="slot_pages" onclick="triggerFileInput('file_pages')">
+                                        <span class="photo-slot-badge badge-extra-photo">Inside Pages</span>
+                                        <img src="" alt="Inside Pages" class="photo-slot-preview" id="preview_pages">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-book-open fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Pages & Edges</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Paper color</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_pages')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('pages', 'file_pages')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_pages" name="pages_cover" accept="image/*" onchange="handlePhotoUpload(this, 'pages')">
+                                    </div>
+
+                                    <!-- Slot 5: Defects & Damage Proof -->
+                                    <div class="photo-slot" id="slot_damage" onclick="triggerFileInput('file_damage')">
+                                        <span class="photo-slot-badge badge-extra-photo">Damage Proof</span>
+                                        <img src="" alt="Damage Proof" class="photo-slot-preview" id="preview_damage">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-circle-exclamation fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Damage Close-up</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Flaws (if any)</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_damage')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('damage', 'file_damage')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_damage" name="damage_cover" accept="image/*" onchange="handlePhotoUpload(this, 'damage')">
+                                    </div>
+
+                                    <!-- Slot 6: Others / Extra Photo (No specific section) -->
+                                    <div class="photo-slot" id="slot_other" onclick="triggerFileInput('file_other')">
+                                        <span class="photo-slot-badge badge-extra-photo">Others</span>
+                                        <img src="" alt="Others Photo" class="photo-slot-preview" id="preview_other">
+                                        <div class="photo-slot-placeholder">
+                                            <i class="fa-solid fa-camera-retro fs-3 text-secondary mb-1"></i>
+                                            <div class="photo-slot-title">Others</div>
+                                            <small class="text-muted" style="font-size: 0.68rem;">Extra / Free angle</small>
+                                        </div>
+                                        <div class="photo-slot-overlay">
+                                            <button type="button" class="btn btn-sm btn-light rounded-circle" title="Change" onclick="event.stopPropagation(); triggerFileInput('file_other')">
+                                                <i class="fa-solid fa-pen"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-danger rounded-circle" title="Remove" onclick="event.stopPropagation(); removePhotoSlot('other', 'file_other')">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </div>
+                                        <input type="file" class="d-none" id="file_other" name="other_cover" accept="image/*" onchange="handlePhotoUpload(this, 'other')">
+                                    </div>
+                                </div>
+                                <div class="mt-2 text-muted small">
+                                    <i class="fa-regular fa-lightbulb text-warning me-1"></i> Front cover is mandatory. Adding the back cover, spine, pages, defects, or extra angles (others) helps your book rent and sell significantly faster!
+                                </div>
+                            </div>
+
+                            <hr class="my-3 text-muted opacity-25">
+
+                            <!-- Physical Condition & Damage Checklist -->
+                            <div class="row g-3">
+                                <div class="col-md-5">
+                                    <label for="condition" class="form-label fw-semibold">Condition Rating <span class="text-danger">*</span></label>
+                                    <select class="form-select" id="condition" name="condition" required onchange="onConditionChange()">
+                                        <option value="New">New (Unread, shrink-wrap or perfect)</option>
+                                        <option value="Like New">Like New (Mint, crisp spine, no marks)</option>
+                                        <option value="Very Good">Very Good (Minimal shelf wear)</option>
+                                        <option value="Good" selected>Good (Readable, mild cover/page wear)</option>
+                                        <option value="Fair">Fair (Readable, obvious wear, marks or yellowing)</option>
+                                        <option value="Poor">Poor (Heavily worn, loose binding or stained)</option>
+                                    </select>
+                                    <div class="alert alert-light border mt-2 py-2 px-3 small" id="conditionGuideText">
+                                        <i class="fa-solid fa-circle-info text-info me-1"></i> Readable copy with signs of previous reading or mild shelf wear.
+                                    </div>
+                                </div>
+
+                                <div class="col-md-7">
+                                    <label class="form-label fw-semibold mb-2">Common Flaws Checklist <small class="text-muted fw-normal">(Tick any that apply)</small></label>
+                                    <div class="tag-pills-wrap" id="damageChecklistWrap">
+                                        <?php 
+                                        $flaws = [
+                                            'No noticeable damage', 'Creased spine', 'Yellowing / Foxing pages', 
+                                            'Pen / Highlighter markings', 'Cover edge wear / crease', 'Water stain / wavy pages', 'Torn / dog-eared pages'
+                                        ];
+                                        foreach ($flaws as $flaw): 
+                                        ?>
+                                            <span class="tag-pill <?php echo $flaw === 'No noticeable damage' ? 'active' : ''; ?>" data-type="damage" data-val="<?php echo htmlspecialchars($flaw); ?>" onclick="toggleDamageTag(this)">
+                                                <i class="fa-solid <?php echo $flaw === 'No noticeable damage' ? 'fa-check' : 'fa-plus'; ?> tag-icon"></i> <?php echo htmlspecialchars($flaw); ?>
+                                            </span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div id="hiddenDamagesContainer">
+                                        <input type="hidden" name="damage_tags[]" value="No noticeable damage">
+                                    </div>
+
+                                    <div class="mt-2" id="damagesTextWrap">
+                                        <label for="damages" class="form-label small fw-semibold text-muted">Additional Damage Details (Optional)</label>
+                                        <textarea class="form-control" id="damages" name="damages" rows="2" placeholder="e.g. Minor pencil notes on chapters 1-3, front bottom corner has tiny fold."></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STEP 3: Pricing Strategy & Inventory -->
+                        <div class="wizard-step-content" id="wizardStep3" style="display: none;">
+                            <!-- Listing Mode Selector -->
+                            <div class="mb-3">
+                                <label class="form-label fw-bold text-dark">Select Listing Option <span class="text-danger">*</span></label>
+                                <div class="listing-mode-group">
+                                    <div class="listing-mode-card active" id="modeCard_both" onclick="setListingMode('both')">
+                                        <i class="fa-solid fa-bolt text-warning"></i>
+                                        <div class="fw-bold text-dark">Both (Sell & Rent)</div>
+                                        <small class="text-muted">Maximum reach: buyers can purchase or borrow</small>
+                                        <input type="radio" name="listing_type" value="both" class="d-none" checked>
+                                    </div>
+                                    <div class="listing-mode-card" id="modeCard_sale" onclick="setListingMode('sale')">
+                                        <i class="fa-solid fa-tag text-success"></i>
+                                        <div class="fw-bold text-dark">For Sale Only</div>
+                                        <small class="text-muted">Sell book directly to keep 100% of profit</small>
+                                        <input type="radio" name="listing_type" value="sale" class="d-none">
+                                    </div>
+                                    <div class="listing-mode-card" id="modeCard_rent" onclick="setListingMode('rent')">
+                                        <i class="fa-solid fa-rotate text-info"></i>
+                                        <div class="fw-bold text-dark">For Rent Only</div>
+                                        <small class="text-muted">Lend out repeatedly for steady income</small>
+                                        <input type="radio" name="listing_type" value="rent" class="d-none">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Pricing Strategy Boxes -->
+                            <div class="row g-3 mb-3">
+                                <!-- Sales Pricing Box -->
+                                <div class="col-md-6" id="salePricingCol">
+                                    <div class="pricing-section-box h-100">
+                                        <div class="d-flex justify-content-between align-items-center mb-3">
+                                            <h6 class="fw-bold mb-0 text-success"><i class="fa-solid fa-tag me-1"></i> Sales Pricing Strategy</h6>
+                                            <span class="badge bg-success-subtle text-success border border-success">One-Time Sale</span>
+                                        </div>
+                                        
+                                        <div class="row g-2 mb-2">
+                                            <div class="col-6">
+                                                <label for="book_value" class="form-label small fw-semibold">Book Market Value (₱)</label>
+                                                <input type="number" class="form-control" id="book_value" name="book_value" step="0.01" min="0" value="250.00" oninput="calculatePrices()">
+                                                <div class="form-text">Original SRP or estimated value</div>
                                             </div>
-                                            <div class="col-md-6">
-                                                <label for="handling_fee" class="form-label">Handling Fee (₱)</label>
-                                                <input type="number" class="form-control" id="handling_fee" name="handling_fee" step="0.01" min="0" value="10" onchange="calculatePrices()" readonly>
+                                            <div class="col-6">
+                                                <label for="listing_fee" class="form-label small fw-semibold">Platform Fee (₱)</label>
+                                                <input type="number" class="form-control bg-light" id="listing_fee" name="listing_fee" value="30.00" readonly>
+                                                <div class="form-text">Fixed platform listing fee</div>
+                                            </div>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label for="markup_percentage" class="form-label small fw-semibold">Markup Rate (%)</label>
+                                            <input type="number" class="form-control bg-light" id="markup_percentage" name="markup_percentage" value="30" readonly>
+                                            <div class="form-text">Formula: (Book Value + Fee) × 1.30</div>
+                                        </div>
+
+                                        <div class="p-3 bg-light rounded-3 border">
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <label for="price" class="form-label fw-bold mb-0 text-dark">Final Whole Book Price (₱) <span class="text-danger">*</span></label>
+                                                <small class="text-muted">Suggested: ₱<span id="suggested_price" class="fw-bold text-dark">0.00</span></small>
+                                            </div>
+                                            <div class="input-group">
+                                                <span class="input-group-text bg-white fw-bold">₱</span>
+                                                <input type="number" class="form-control form-control-lg fs-5 fw-bold text-success" id="price" name="price" step="0.01" min="0" value="364.00" required>
+                                                <button class="btn btn-outline-secondary" type="button" onclick="resetToSuggestedPrice('sale')">Auto</button>
+                                            </div>
+                                            <small class="text-muted">You can customize the price or keep the auto-suggested rate</small>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Rental Pricing Box -->
+                                <div class="col-md-6" id="rentPricingCol">
+                                    <div class="pricing-section-box h-100">
+                                        <div class="d-flex justify-content-between align-items-center mb-3">
+                                            <h6 class="fw-bold mb-0 text-primary"><i class="fa-solid fa-rotate me-1"></i> Rental Pricing Strategy</h6>
+                                            <span class="badge bg-primary-subtle text-primary border border-primary">Weekly Rental</span>
+                                        </div>
+
+                                        <div class="row g-2 mb-2">
+                                            <div class="col-6">
+                                                <label for="base_rental_fee" class="form-label small fw-semibold">Base Rental Fee (₱)</label>
+                                                <input type="number" class="form-control" id="base_rental_fee" name="base_rental_fee" step="0.01" min="0" value="30.00" oninput="calculatePrices()">
+                                                <div class="form-text">Your weekly earnings</div>
+                                            </div>
+                                            <div class="col-6">
+                                                <label for="handling_fee" class="form-label small fw-semibold">Handling Fee (₱)</label>
+                                                <input type="number" class="form-control bg-light" id="handling_fee" name="handling_fee" value="10.00" readonly>
                                                 <div class="form-text">Fixed handling fee</div>
                                             </div>
                                         </div>
-                                        <div class="row mb-3">
-                                            <div class="col-md-6">
-                                                <label for="condition_multiplier" class="form-label">Condition Multiplier</label>
-                                                <input type="number" class="form-control" id="condition_multiplier" name="condition_multiplier" step="0.01" min="0.5" value="1.2" readonly>
+
+                                        <div class="row g-2 mb-3">
+                                            <div class="col-6">
+                                                <label for="condition_multiplier" class="form-label small fw-semibold">Condition Multiplier</label>
+                                                <input type="number" class="form-control bg-light" id="condition_multiplier" name="condition_multiplier" step="0.01" value="0.90" readonly>
+                                                <div class="form-text">Adjusted by condition</div>
+                                            </div>
+                                            <div class="col-6">
+                                                <label for="security_deposit" class="form-label small fw-semibold">Security Deposit (₱)</label>
+                                                <input type="number" class="form-control" id="security_deposit" name="security_deposit" step="0.01" value="250.00">
+                                                <div class="form-text">Refundable protection</div>
                                             </div>
                                         </div>
-                                        
-                                        <!-- Sales Pricing Fields -->
-                                        <h6>Sales Pricing</h6>
-                                        <div class="row mb-2">
-                                            <div class="col-md-6">
-                                                <label for="book_value" class="form-label">Book Value (₱)</label>
-                                                <input type="number" class="form-control" id="book_value" name="book_value" step="0.01" min="0" value="200" onchange="calculatePrices()">
+
+                                        <div class="p-3 bg-light rounded-3 border">
+                                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                                <label for="rent_price" class="form-label fw-bold mb-0 text-dark">Weekly Rent Price (₱) <span class="text-danger">*</span></label>
+                                                <small class="text-muted">Suggested: ₱<span id="suggested_rent_price" class="fw-bold text-dark">0.00</span></small>
                                             </div>
-                                            <div class="col-md-6">
-                                                <label for="listing_fee" class="form-label">Listing Fee (₱)</label>
-                                                <input type="number" class="form-control" id="listing_fee" name="listing_fee" step="0.01" min="0" value="30" onchange="calculatePrices()" readonly>
-                                                <div class="form-text">Fixed listing fee</div>
+                                            <div class="input-group">
+                                                <span class="input-group-text bg-white fw-bold">₱</span>
+                                                <input type="number" class="form-control form-control-lg fs-5 fw-bold text-primary" id="rent_price" name="rent_price" step="0.01" min="0" value="36.00" required>
+                                                <button class="btn btn-outline-secondary" type="button" onclick="resetToSuggestedPrice('rent')">Auto</button>
                                             </div>
-                                        </div>
-                                        <div class="row mb-3">
-                                            <div class="col-md-6">
-                                                <label for="markup_percentage" class="form-label">Markup (%)</label>
-                                                <input type="number" class="form-control" id="markup_percentage" name="markup_percentage" step="1" min="0" max="100" value="30" onchange="calculatePrices()" readonly>
-                                                <div class="form-text">Fixed markup percentage</div>
-                                            </div>
+                                            <small class="text-muted">Charged per 7-day lending cycle</small>
                                         </div>
                                     </div>
                                 </div>
-                                
-                                <div class="mb-3">
-                                    <label for="price" class="form-label">Price (Whole book) (₱)</label>
-                                    <div class="input-group">
-                                        <input type="number" class="form-control" id="price" name="price" step="0.01" min="0" required>
-                                        <button class="btn btn-outline-secondary" type="button" onclick="calculatePrices()">Recalculate</button>
-                                    </div>
-                                    <div class="form-text">Suggested: ₱<span id="suggested_price">0.00</span></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="rent_price" class="form-label">Rent Price (Per week) (₱)</label>
-                                    <div class="input-group">
-                                        <input type="number" class="form-control" id="rent_price" name="rent_price" step="0.01" min="0" required>
-                                        <button class="btn btn-outline-secondary" type="button" onclick="calculatePrices()">Recalculate</button>
-                                    </div>
-                                    <div class="form-text">Suggested: ₱<span id="suggested_rent_price">0.00</span></div>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="stock" class="form-label">Stock</label>
-                                    <input type="number" class="form-control" id="stock" name="stock" min="0" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label for="cover_image" class="form-label">Cover Image</label>
-                                    <input type="file" class="form-control" id="cover_image" name="cover_image" accept="image/*">
-                                    <div class="form-text">Recommended size: 400x600 pixels</div>
-                                </div>
-                                <!-- Popularity is hidden and will be set by the system -->
-                                <input type="hidden" name="popularity" value="New Releases">
                             </div>
-                            <div class="col-12">
-                                <div class="mb-3">
-                                    <label for="description" class="form-label">Description</label>
-                                    <textarea class="form-control" id="description" name="description" rows="3" required></textarea>
+
+                            <!-- Inventory & Seller Remarks -->
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <div class="p-3 bg-light rounded-3 border">
+                                        <label for="stock" class="form-label fw-bold text-dark">Inventory Stock <span class="text-danger">*</span></label>
+                                        <div class="input-group">
+                                            <button class="btn btn-outline-secondary" type="button" onclick="adjustStock(-1)">-</button>
+                                            <input type="number" class="form-control text-center fw-bold fs-5" id="stock" name="stock" min="1" value="1" required>
+                                            <button class="btn btn-outline-secondary" type="button" onclick="adjustStock(1)">+</button>
+                                        </div>
+                                        <small class="text-muted mt-1 d-block">Number of available physical copies</small>
+                                    </div>
+                                </div>
+                                <div class="col-md-8">
+                                    <div class="p-3 bg-light rounded-3 border">
+                                        <label for="seller_note" class="form-label fw-bold text-dark">Seller Note & Lending Guidelines <small class="text-muted fw-normal">(Optional)</small></label>
+                                        <textarea class="form-control" id="seller_note" name="seller_note" rows="2" placeholder="e.g. Kept in smoke-free home, comes with clear plastic cover. Please avoid liquid spills."></textarea>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Add Book</button>
+                    
+                    <!-- Wizard Navigation Footer -->
+                    <div class="modal-footer bg-light border-top py-3 d-flex justify-content-between flex-shrink-0">
+                        <div>
+                            <button type="button" class="btn btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-secondary px-4" id="wizardPrevBtn" onclick="navigateWizardStep(-1)" style="display: none;">
+                                <i class="fa-solid fa-arrow-left me-1"></i> Previous
+                            </button>
+                            <button type="button" class="btn btn-primary px-4 fw-bold" id="wizardNextBtn" onclick="navigateWizardStep(1)">
+                                Next: Photos & Condition <i class="fa-solid fa-arrow-right ms-1"></i>
+                            </button>
+                            <button type="submit" class="btn btn-success px-4 fw-bold shadow-sm" id="wizardSubmitBtn" style="display: none;">
+                                <i class="fa-solid fa-check me-1"></i> Publish Book Listing
+                            </button>
+                        </div>
                     </div>
-                </form>
-            </div>
+            </form>
         </div>
     </div>
     
@@ -1548,39 +2223,367 @@ while ($row = $theme_result->fetch_assoc()) {
                     multiplierInput.value = 1.0;
             }
         }
-        
+
+        // ==================== ADD BOOK WIZARD JAVASCRIPT ====================
+        let currentWizardStep = 1;
+
+        function showWizardStep(step) {
+            currentWizardStep = step;
+            for (let i = 1; i <= 3; i++) {
+                const stepContent = document.getElementById('wizardStep' + i);
+                const stepNode = document.getElementById('stepNode' + i);
+                if (stepContent) {
+                    stepContent.style.display = (i === step) ? 'block' : 'none';
+                }
+                if (stepNode) {
+                    stepNode.classList.remove('active', 'completed');
+                    if (i < step) {
+                        stepNode.classList.add('completed');
+                        stepNode.querySelector('.wizard-step-circle').innerHTML = '<i class="fa-solid fa-check"></i>';
+                    } else if (i === step) {
+                        stepNode.classList.add('active');
+                        stepNode.querySelector('.wizard-step-circle').textContent = i;
+                    } else {
+                        stepNode.querySelector('.wizard-step-circle').textContent = i;
+                    }
+                }
+            }
+
+            const prevBtn = document.getElementById('wizardPrevBtn');
+            const nextBtn = document.getElementById('wizardNextBtn');
+            const submitBtn = document.getElementById('wizardSubmitBtn');
+
+            if (prevBtn) prevBtn.style.display = (step > 1) ? 'inline-block' : 'none';
+            if (nextBtn) {
+                nextBtn.style.display = (step < 3) ? 'inline-block' : 'none';
+                if (step === 1) nextBtn.innerHTML = 'Next: Photos & Condition <i class="fa-solid fa-arrow-right ms-1"></i>';
+                if (step === 2) nextBtn.innerHTML = 'Next: Pricing & Stock <i class="fa-solid fa-arrow-right ms-1"></i>';
+            }
+            if (submitBtn) submitBtn.style.display = (step === 3) ? 'inline-block' : 'none';
+        }
+
+        function validateWizardStep(step) {
+            if (step === 1) {
+                const title = document.getElementById('title');
+                const author = document.getElementById('author');
+                const desc = document.getElementById('description');
+                if (!title || !title.value.trim()) {
+                    alert('Please provide the book title.');
+                    if (title) title.focus();
+                    return false;
+                }
+                if (!author || !author.value.trim()) {
+                    alert('Please provide the author name.');
+                    if (author) author.focus();
+                    return false;
+                }
+                if (!desc || !desc.value.trim()) {
+                    alert('Please enter a brief description/synopsis.');
+                    if (desc) desc.focus();
+                    return false;
+                }
+            } else if (step === 2) {
+                const fileCover = document.getElementById('file_cover');
+                const preview = document.getElementById('preview_cover');
+                if ((!fileCover || !fileCover.files || fileCover.files.length === 0) && (!preview || !preview.src || preview.src.trim() === '' || preview.src === window.location.href)) {
+                    alert('Please upload at least the Front Cover photo (Slot 1).');
+                    triggerFileInput('file_cover');
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function navigateWizardStep(delta) {
+            const nextStep = currentWizardStep + delta;
+            if (delta > 0 && !validateWizardStep(currentWizardStep)) {
+                return;
+            }
+            if (nextStep >= 1 && nextStep <= 3) {
+                showWizardStep(nextStep);
+            }
+        }
+
+        function jumpToWizardStep(targetStep) {
+            if (targetStep > currentWizardStep) {
+                for (let s = currentWizardStep; s < targetStep; s++) {
+                    if (!validateWizardStep(s)) return;
+                }
+            }
+            showWizardStep(targetStep);
+        }
+
+        // Shopee-style photo upload handlers
+        function triggerFileInput(id) {
+            const input = document.getElementById(id);
+            if (input) input.click();
+        }
+
+        function handlePhotoUpload(input, slotKey) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const preview = document.getElementById('preview_' + slotKey);
+                    const slot = document.getElementById('slot_' + slotKey);
+                    if (preview && slot) {
+                        preview.src = e.target.result;
+                        slot.classList.add('has-image');
+                    }
+                };
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        function removePhotoSlot(slotKey, inputId) {
+            const preview = document.getElementById('preview_' + slotKey);
+            const slot = document.getElementById('slot_' + slotKey);
+            const input = document.getElementById(inputId);
+            if (preview) preview.src = '';
+            if (slot) slot.classList.remove('has-image');
+            if (input) input.value = '';
+        }
+
+        // Tag Pills for Genre & Theme
+        function toggleTagPill(el) {
+            el.classList.toggle('active');
+            const isGenre = el.getAttribute('data-type') === 'genre';
+            const icon = el.querySelector('.tag-icon');
+            if (el.classList.contains('active')) {
+                if (icon) icon.className = 'fa-solid fa-check tag-icon';
+            } else {
+                if (icon) icon.className = 'fa-solid fa-plus tag-icon';
+            }
+            syncHiddenTagInputs(isGenre ? 'genre' : 'theme');
+        }
+
+        function syncHiddenTagInputs(type) {
+            const container = document.getElementById(type === 'genre' ? 'genrePillsContainer' : 'themePillsContainer');
+            const hiddenContainer = document.getElementById(type === 'genre' ? 'hiddenGenresContainer' : 'hiddenThemesContainer');
+            const countBadge = document.getElementById(type === 'genre' ? 'selectedGenreCount' : 'selectedThemeCount');
+            
+            if (!container || !hiddenContainer) return;
+            const activePills = container.querySelectorAll('.tag-pill.active');
+            hiddenContainer.innerHTML = '';
+            
+            activePills.forEach(pill => {
+                const val = pill.getAttribute('data-val');
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = (type === 'genre' ? 'genres[]' : 'themes[]');
+                input.value = val;
+                hiddenContainer.appendChild(input);
+            });
+
+            if (countBadge) {
+                countBadge.textContent = activePills.length + ' selected';
+            }
+        }
+
+        function addCustomTag(type) {
+            const input = document.getElementById(type === 'genre' ? 'customGenreInput' : 'customThemeInput');
+            if (!input) return;
+            const val = input.value.trim();
+            if (!val) return;
+            
+            const container = document.getElementById(type === 'genre' ? 'genrePillsContainer' : 'themePillsContainer');
+            if (!container) return;
+            
+            let existing = null;
+            container.querySelectorAll('.tag-pill').forEach(p => {
+                if (p.getAttribute('data-val').toLowerCase() === val.toLowerCase()) existing = p;
+            });
+            
+            if (existing) {
+                if (!existing.classList.contains('active')) {
+                    toggleTagPill(existing);
+                }
+            } else {
+                const pill = document.createElement('span');
+                pill.className = 'tag-pill active';
+                pill.setAttribute('data-type', type);
+                pill.setAttribute('data-val', val);
+                pill.onclick = function() { toggleTagPill(this); };
+                pill.innerHTML = `<i class="fa-solid fa-check tag-icon"></i> ${val}`;
+                container.appendChild(pill);
+                syncHiddenTagInputs(type);
+            }
+            input.value = '';
+        }
+
+        // Condition & Damage Handlers
+        const conditionDescriptions = {
+            'New': 'Brand new, unread copy in mint condition.',
+            'Like New': 'Excellent condition, crisp pages, spine intact, no marks.',
+            'Very Good': 'Lightly read, minimal shelf wear, complete and clean.',
+            'Good': 'Readable copy with signs of previous reading or mild shelf wear.',
+            'Fair': 'Noticeable cosmetic wear, yellowing or markings, but complete text.',
+            'Poor': 'Heavy wear, stains or loose binding, but intact readable content.'
+        };
+
+        function onConditionChange() {
+            updateConditionMultiplier();
+            const cond = document.getElementById('condition').value;
+            const guide = document.getElementById('conditionGuideText');
+            if (guide && conditionDescriptions[cond]) {
+                guide.innerHTML = `<i class="fa-solid fa-circle-info text-info me-1"></i> ${conditionDescriptions[cond]}`;
+            }
+            calculatePrices();
+        }
+
+        function toggleDamageTag(el) {
+            const val = el.getAttribute('data-val');
+            const container = document.getElementById('damageChecklistWrap');
+            if (!container) return;
+            
+            if (val === 'No noticeable damage') {
+                container.querySelectorAll('.tag-pill').forEach(p => {
+                    p.classList.remove('active');
+                    const icon = p.querySelector('.tag-icon');
+                    if (icon) icon.className = 'fa-solid fa-plus tag-icon';
+                });
+                el.classList.add('active');
+                const icon = el.querySelector('.tag-icon');
+                if (icon) icon.className = 'fa-solid fa-check tag-icon';
+            } else {
+                container.querySelectorAll('.tag-pill').forEach(p => {
+                    if (p.getAttribute('data-val') === 'No noticeable damage') {
+                        p.classList.remove('active');
+                        const icon = p.querySelector('.tag-icon');
+                        if (icon) icon.className = 'fa-solid fa-plus tag-icon';
+                    }
+                });
+                el.classList.toggle('active');
+                const icon = el.querySelector('.tag-icon');
+                if (el.classList.contains('active')) {
+                    if (icon) icon.className = 'fa-solid fa-check tag-icon';
+                } else {
+                    if (icon) icon.className = 'fa-solid fa-plus tag-icon';
+                }
+            }
+            
+            const anyActive = container.querySelectorAll('.tag-pill.active').length > 0;
+            if (!anyActive) {
+                const noDmg = container.querySelector('[data-val="No noticeable damage"]');
+                if (noDmg) {
+                    noDmg.classList.add('active');
+                    const icon = noDmg.querySelector('.tag-icon');
+                    if (icon) icon.className = 'fa-solid fa-check tag-icon';
+                }
+            }
+
+            const hiddenCont = document.getElementById('hiddenDamagesContainer');
+            if (hiddenCont) {
+                hiddenCont.innerHTML = '';
+                container.querySelectorAll('.tag-pill.active').forEach(p => {
+                    const inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'damage_tags[]';
+                    inp.value = p.getAttribute('data-val');
+                    hiddenCont.appendChild(inp);
+                });
+            }
+        }
+
+        // Listing Mode & Pricing Calculations
+        function setListingMode(mode) {
+            ['both', 'sale', 'rent'].forEach(m => {
+                const card = document.getElementById('modeCard_' + m);
+                if (card) {
+                    card.classList.toggle('active', m === mode);
+                    const radio = card.querySelector('input[type="radio"]');
+                    if (radio) radio.checked = (m === mode);
+                }
+            });
+
+            const saleCol = document.getElementById('salePricingCol');
+            const rentCol = document.getElementById('rentPricingCol');
+            const priceInp = document.getElementById('price');
+            const rentPriceInp = document.getElementById('rent_price');
+
+            if (mode === 'both') {
+                if (saleCol) { saleCol.style.opacity = '1'; saleCol.style.pointerEvents = 'auto'; }
+                if (rentCol) { rentCol.style.opacity = '1'; rentCol.style.pointerEvents = 'auto'; }
+                if (priceInp) priceInp.required = true;
+                if (rentPriceInp) rentPriceInp.required = true;
+            } else if (mode === 'sale') {
+                if (saleCol) { saleCol.style.opacity = '1'; saleCol.style.pointerEvents = 'auto'; }
+                if (rentCol) { rentCol.style.opacity = '0.35'; rentCol.style.pointerEvents = 'none'; }
+                if (priceInp) priceInp.required = true;
+                if (rentPriceInp) rentPriceInp.required = false;
+            } else if (mode === 'rent') {
+                if (saleCol) { saleCol.style.opacity = '0.35'; saleCol.style.pointerEvents = 'none'; }
+                if (rentCol) { rentCol.style.opacity = '1'; rentCol.style.pointerEvents = 'auto'; }
+                if (priceInp) priceInp.required = false;
+                if (rentPriceInp) rentPriceInp.required = true;
+            }
+        }
+
+        function resetToSuggestedPrice(type) {
+            if (type === 'sale') {
+                const sug = document.getElementById('suggested_price').textContent;
+                document.getElementById('price').value = parseFloat(sug) || 0;
+            } else if (type === 'rent') {
+                const sug = document.getElementById('suggested_rent_price').textContent;
+                document.getElementById('rent_price').value = parseFloat(sug) || 0;
+            }
+        }
+
+        function adjustStock(delta) {
+            const stockInp = document.getElementById('stock');
+            if (stockInp) {
+                let val = parseInt(stockInp.value) || 1;
+                val = Math.max(1, val + delta);
+                stockInp.value = val;
+            }
+        }
+
         // Function to calculate prices based on the formulas
         function calculatePrices() {
-            // Get rental pricing inputs
+            // Rental pricing inputs
             const baseRentalFee = parseFloat(document.getElementById('base_rental_fee').value) || 0;
-            const handlingFee = parseFloat(document.getElementById('handling_fee').value) || 0;
-            const conditionMultiplier = parseFloat(document.getElementById('condition_multiplier').value) || 1;
+            const handlingFee = parseFloat(document.getElementById('handling_fee').value) || 10;
+            const conditionMultiplier = parseFloat(document.getElementById('condition_multiplier').value) || 1.0;
             
-            // Get sales pricing inputs
+            // Sales pricing inputs
             const bookValue = parseFloat(document.getElementById('book_value').value) || 0;
-            const listingFee = parseFloat(document.getElementById('listing_fee').value) || 0;
-            const markupPercentage = parseFloat(document.getElementById('markup_percentage').value) || 0;
+            const listingFee = parseFloat(document.getElementById('listing_fee').value) || 30;
+            const markupPercentage = parseFloat(document.getElementById('markup_percentage').value) || 30;
             const markup = markupPercentage / 100;
             
-            // Calculate rental price: SP = (Base Rental Fee + Handling) × Condition Multiplier
+            // Calculate suggested prices
             const suggestedRentPrice = (baseRentalFee + handlingFee) * conditionMultiplier;
-            
-            // Calculate sales price: SP = (Book Value + Listing Fee) × (1 + Markup)
             const suggestedPrice = (bookValue + listingFee) * (1 + markup);
             
             // Update the displayed suggested prices
-            document.getElementById('suggested_rent_price').textContent = suggestedRentPrice.toFixed(2);
-            document.getElementById('suggested_price').textContent = suggestedPrice.toFixed(2);
+            const rentEl = document.getElementById('suggested_rent_price');
+            const saleEl = document.getElementById('suggested_price');
+            if (rentEl) rentEl.textContent = suggestedRentPrice.toFixed(2);
+            if (saleEl) saleEl.textContent = suggestedPrice.toFixed(2);
             
-            // Update the actual input fields with the calculated values
-            document.getElementById('rent_price').value = suggestedRentPrice.toFixed(2);
-            document.getElementById('price').value = suggestedPrice.toFixed(2);
+            // Auto-update security deposit if user hasn't typed custom value
+            const depositInp = document.getElementById('security_deposit');
+            if (depositInp && (!depositInp.dataset.manual || depositInp.dataset.manual !== 'true')) {
+                depositInp.value = bookValue.toFixed(2);
+            }
         }
-        
-        // Call the function when the page loads
+
+        // Call functions on page load
         document.addEventListener('DOMContentLoaded', function() {
             updateConditionMultiplier();
             calculatePrices();
+            showWizardStep(1);
+
+            // Track if user manually changes security deposit
+            const depositInp = document.getElementById('security_deposit');
+            if (depositInp) {
+                depositInp.addEventListener('input', function() {
+                    this.dataset.manual = 'true';
+                });
+            }
+
+            // Sync initial tags
+            syncHiddenTagInputs('genre');
+            syncHiddenTagInputs('theme');
             
             // Also set up the edit form
             const editConditionSelect = document.getElementById('edit_condition');

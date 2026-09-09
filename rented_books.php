@@ -270,109 +270,129 @@ if (isset($_GET['action']) && isset($_GET['rental_id'])) {
     }
 }
 
-// Confirm receipt of item (Rental or Purchase)
-if (isset($_GET['action']) && $_GET['action'] == 'confirm_receipt' && isset($_GET['order_item_id'])) {
-    $orderItemId = intval($_GET['order_item_id']);
+// Process Order Received & Book Condition Inspection
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && $_POST['action'] === 'confirm_order_received') {
+    $orderId = (int)($_POST['order_id'] ?? 0);
+    $orderItemId = (int)($_POST['item_id'] ?? 0);
+    $bookCondition = trim($_POST['book_condition'] ?? 'good');
+    $conditionNotes = trim($_POST['condition_notes'] ?? '');
+    
+    // Validate that the buyer completed the physical condition checklist
+    $chkCover = isset($_POST['chk_cover']) ? 1 : 0;
+    $chkPages = isset($_POST['chk_pages']) ? 1 : 0;
+    $chkSpine = isset($_POST['chk_spine']) ? 1 : 0;
 
-    $typeStmt = $conn->prepare("
-        SELECT oi.item_id, oi.purchase_type, oi.rental_weeks, oi.book_id, oi.order_id, oi.seller_id, oi.unit_price,
-               b.rent_price, b.price
-        FROM order_items oi 
-        JOIN books b ON oi.book_id = b.book_id 
-        WHERE oi.item_id = ?
-    ");
-    $typeStmt->bind_param("i", $orderItemId);
-    $typeStmt->execute();
-    $typeResult = $typeStmt->get_result();
-    $itemType = $typeResult->fetch_assoc();
-
-    if (!$itemType) {
-        $_SESSION['error_message'] = "Item not found.";
-        header("Location: rented_books.php");
+    if (!$chkCover || !$chkPages || !$chkSpine) {
+        $_SESSION['error_message'] = "Please inspect and check all 3 physical condition verification items before confirming receipt.";
+        header("Location: rented_books.php?tab=to_receive");
         exit();
     }
 
-    error_log("Item #" . $orderItemId . " purchase_type: '" . $itemType['purchase_type'] . "'");
-    error_log("Item #" . $orderItemId . " rental_weeks: " . $itemType['rental_weeks']);
+    // Verify order item belongs to this buyer
+    $vStmt = $conn->prepare("
+        SELECT oi.item_id, oi.order_id, oi.book_id, oi.seller_id, oi.purchase_type, oi.rental_weeks, oi.unit_price,
+               b.title as book_title, b.author as book_author, b.price as book_price, b.book_value, b.cover_image,
+               o.payment_method, o.payment_status
+        FROM order_items oi
+        JOIN orders o ON oi.order_id = o.order_id
+        JOIN books b ON oi.book_id = b.book_id
+        WHERE oi.item_id = ? AND o.order_id = ? AND o.user_id = ?
+    ");
+    $vStmt->bind_param("iii", $orderItemId, $orderId, $userId);
+    $vStmt->execute();
+    $item = $vStmt->get_result()->fetch_assoc();
 
-    // Update status to 'delivered'
-    $updateStmt = $conn->prepare("UPDATE order_items SET status = 'delivered' WHERE item_id = ?");
-    $updateStmt->bind_param("i", $orderItemId);
-    $updateStmt->execute();
+    if (!$item) {
+        $_SESSION['error_message'] = "Invalid order item or permission denied.";
+        header("Location: rented_books.php?tab=to_receive");
+        exit();
+    }
 
-    // IMPORTANT: Only create rental records for items with purchase_type='rent'
-    if ($itemType['purchase_type'] == 'rent' && $itemType['rental_weeks'] > 0) {
-        // Check if rental already exists
-        $checkRentalStmt = $conn->prepare("SELECT rental_id FROM book_rentals WHERE order_id = ? AND book_id = ? AND user_id = ?");
-        $checkRentalStmt->bind_param("iii", $itemType['order_id'], $itemType['book_id'], $userId);
-        $checkRentalStmt->execute();
-        $existingRental = $checkRentalStmt->get_result();
+    // 1. Update order item status to delivered
+    $updItem = $conn->prepare("UPDATE order_items SET status = 'delivered' WHERE item_id = ?");
+    $updItem->bind_param("i", $orderItemId);
+    $updItem->execute();
 
-        if ($existingRental->num_rows == 0) {
-            // Create rental
-            $rentalDate = date('Y-m-d H:i:s');
-            $dueDate = date('Y-m-d H:i:s', strtotime("+{$itemType['rental_weeks']} weeks"));
-            $totalPrice = $itemType['unit_price'];
+    // 2. Check if all items in order are now delivered
+    $chkAll = $conn->prepare("SELECT COUNT(*) as uncompleted FROM order_items WHERE order_id = ? AND status != 'delivered'");
+    $chkAll->bind_param("i", $orderId);
+    $chkAll->execute();
+    if ($chkAll->get_result()->fetch_assoc()['uncompleted'] == 0) {
+        $updOrder = $conn->prepare("UPDATE orders SET order_status = 'delivered' WHERE order_id = ?");
+        $updOrder->bind_param("i", $orderId);
+        $updOrder->execute();
+    }
 
-            // Find seller ID
-            $bookStmt = $conn->prepare("SELECT user_id FROM books WHERE book_id = ?");
-            $bookStmt->bind_param("i", $itemType['book_id']);
-            $bookStmt->execute();
-            $bookResult = $bookStmt->get_result()->fetch_assoc();
+    $rentalWeeks = max(1, (int)$item['rental_weeks']);
+    $depositHeld = (float)($item['book_value'] ?? ($item['book_price'] * 0.5));
+    if ($depositHeld <= 0) $depositHeld = round((float)$item['unit_price'] * 2.5, 2);
 
-            $sellerIdQuery = $conn->prepare("SELECT id FROM sellers WHERE user_id = ?");
-            $sellerIdQuery->bind_param("i", $bookResult['user_id']);
-            $sellerIdQuery->execute();
-            $sellerResult = $sellerIdQuery->get_result();
+    $notesText = "Verified upon receipt: " . ucfirst($bookCondition) . ". Passed checklist (Cover intact, Pages complete, Spine secure). " . ($conditionNotes ? "Notes: $conditionNotes" : "");
 
-            $sellerId = ($sellerResult->num_rows > 0) ? $sellerResult->fetch_assoc()['id'] : 2;
-
-            $rentalStmt = $conn->prepare("
-                INSERT INTO book_rentals (
-                    user_id, book_id, seller_id, order_id,
-                    rental_date, due_date, rental_weeks, status, total_price
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
-            ");
-            $rentalStmt->bind_param(
-                "iiisssid",
-                $userId,
-                $itemType['book_id'],
-                $sellerId,
-                $itemType['order_id'],
-                $rentalDate,
-                $dueDate,
-                $itemType['rental_weeks'],
-                $totalPrice
-            );
-
-            if ($rentalStmt->execute()) {
-                $rentalId = $conn->insert_id;
-                $_SESSION['success_message'] = "Your rental has started! You can now track your rental duration in the Rentals tab. Due date: " . date('F j, Y', strtotime($dueDate));
-            } else {
-                $_SESSION['error_message'] = "Failed to create rental: " . $rentalStmt->error;
-            }
-        } else {
-            $rentalId = $existingRental->fetch_assoc()['rental_id'];
-            $_SESSION['success_message'] = "This rental is already active. You can track its duration in the Rentals tab.";
+    // 3. If rental, activate the rental record and set rental/due dates
+    if ($item['purchase_type'] === 'rent') {
+        // Look up seller DB ID
+        $sellerDbId = (int)$item['seller_id'];
+        $sLook = $conn->prepare("SELECT id FROM sellers WHERE user_id = ? OR id = ? LIMIT 1");
+        $sLook->bind_param("ii", $item['seller_id'], $item['seller_id']);
+        $sLook->execute();
+        if ($sRow = $sLook->get_result()->fetch_assoc()) {
+            $sellerDbId = (int)$sRow['id'];
         }
 
-        header("Location: rented_books.php?tab=rentals&highlight_rental=" . ($rentalId ?? 0));
-        exit();
-    } else {
-        // This is a purchase, not a rental
-        $logStmt = $conn->prepare("
-            INSERT INTO payment_logs (order_id, user_id, action, status, amount, details)
-            VALUES (?, ?, 'purchase_confirmation', 'success', ?, ?)
-        ");
-        $details = "Purchase confirmed for book: " . $itemType['book_id'];
-        $amount = $itemType['unit_price'];
-        $logStmt->bind_param("iids", $itemType['order_id'], $userId, $amount, $details);
-        $logStmt->execute();
+        // Check if rental record already exists
+        $chkRent = $conn->prepare("SELECT rental_id FROM book_rentals WHERE order_id = ? AND book_id = ? LIMIT 1");
+        $chkRent->bind_param("ii", $orderId, $item['book_id']);
+        $chkRent->execute();
+        $rRow = $chkRent->get_result()->fetch_assoc();
 
-        $_SESSION['success_message'] = "Your purchase has been delivered. Thank you!";
-        header("Location: rented_books.php?tab=completed");
-        exit();
+        if ($rRow) {
+            $rId = (int)$rRow['rental_id'];
+            $updRental = $conn->prepare("
+                UPDATE book_rentals 
+                SET status = 'active', 
+                    rental_date = NOW(), 
+                    due_date = DATE_ADD(NOW(), INTERVAL ? WEEK),
+                    book_condition = ?,
+                    return_notes = ?
+                WHERE rental_id = ?
+            ");
+            $updRental->bind_param("issi", $rentalWeeks, $bookCondition, $notesText, $rId);
+            $updRental->execute();
+        } else {
+            $insRental = $conn->prepare("
+                INSERT INTO book_rentals (
+                    user_id, book_id, seller_id, rental_date, due_date, rental_weeks, status, total_price, order_id, book_condition, return_notes
+                ) VALUES (
+                    ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? WEEK), ?, 'active', ?, ?, ?, ?
+                )
+            ");
+            $insRental->bind_param(
+                "iiiiidiss", 
+                $userId, $item['book_id'], $sellerDbId, 
+                $rentalWeeks, $rentalWeeks, 
+                $item['unit_price'], $orderId, 
+                $bookCondition, $notesText
+            );
+            $insRental->execute();
+            $rId = $conn->insert_id;
+        }
     }
+
+    // 4. Digital Signature & Audit Logging
+    $receiptTime = date('Y-m-d H:i:s');
+    $rawSig = "ORDER:{$orderId}|ITEM:{$orderItemId}|BUYER:{$userId}|DATE:{$receiptTime}|COND:{$bookCondition}|BW-RECEIPT-VERIFIED";
+    $verificationHash = hash('sha256', $rawSig);
+
+    $logStmt = $conn->prepare("INSERT INTO payment_logs (order_id, user_id, action, status, amount, details) VALUES (?, ?, 'order_received', 'success', ?, ?)");
+    $logDetails = "Order #{$orderId} received & physical condition verified: " . ucfirst($bookCondition) . " (Sig: " . substr($verificationHash, 0, 16) . ")";
+    $logAmount = ($item['purchase_type'] === 'rent') ? $depositHeld : $item['unit_price'];
+    $logStmt->bind_param("iids", $orderId, $userId, $logAmount, $logDetails);
+    $logStmt->execute();
+
+    $_SESSION['success_message'] = "Order received! Book condition documented successfully.";
+    header("Location: rented_books.php?tab=" . ($item['purchase_type'] === 'rent' ? 'rentals' : 'completed'));
+    exit();
 }
 
 // Rest of the code remains unchanged
@@ -413,7 +433,7 @@ $rentalsQuery = "
     JOIN sellers s ON br.seller_id = s.id
     JOIN users u ON s.user_id = u.id
     LEFT JOIN orders o ON br.order_id = o.order_id
-    WHERE br.user_id = ? AND br.status = 'active'
+    WHERE br.user_id = ? AND br.status IN ('active', 'return_pending')
     ORDER BY br.rental_date DESC
 ";
 
@@ -537,6 +557,10 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Orders & Rentals - BookWagon</title>
     <!-- Bootstrap CSS -->
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -554,9 +578,9 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
         }
         
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: #f8fafc;
         }
         .navbar {
             padding: 15px 0;
@@ -854,6 +878,47 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
             color: #dee2e6;
             margin-bottom: 20px;
         }
+
+        /* Return Book Modal Styles - Simple & Clean */
+        .return-modal-dialog {
+            max-width: 500px;
+        }
+        .return-method-btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #475569;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+        .return-method-btn:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+            color: #0f172a;
+        }
+        .return-method-btn.active {
+            border-color: #0f172a;
+            background: #0f172a;
+            color: #ffffff;
+        }
+        .loc-option-label {
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 8px 12px;
+            background: #ffffff;
+            cursor: pointer;
+            transition: border-color 0.15s ease, background-color 0.15s ease;
+        }
+        .loc-option-label:hover {
+            border-color: #94a3b8 !important;
+            background-color: #fafbfc !important;
+        }
     </style>
 </head>
 <body>
@@ -863,33 +928,13 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link active">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-                    <a href="collections.php" class="sidebar-link">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-                    <a href="history.php" class="sidebar-link">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
             
             <!-- Main Content Column -->
-            <div class="col-md-9">
-                <h2 class="mb-4">My Orders & Rentals</h2>
+            <div class="col-lg-9 col-md-8">
+                <h2 class="mb-4" style="font-weight: 700; color: #0f172a;">My Orders & Rentals</h2>
                 
                 <?php if (isset($_SESSION['success_message'])): ?>
                 <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -1052,10 +1097,21 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             </div>
                             
                             <div class="order-actions">
-                                <?php if ($order['item_status'] == 'shipped_pending_confirmation'): ?>
-                                <a href="rented_books.php?action=confirm_receipt&rental_id=<?php echo $order['order_id']; ?>&order_item_id=<?php echo $order['item_id']; ?>" class="order-action-btn btn-confirm-receipt">
-                                    Confirm Receipt
-                                </a>
+                                <?php if ($order['item_status'] == 'shipped' || $order['item_status'] == 'shipped_pending_confirmation'): ?>
+                                <button type="button" 
+                                        class="order-action-btn btn-confirm-receipt btn-receive-with-inspection"
+                                        data-order-id="<?php echo $order['order_id']; ?>"
+                                        data-item-id="<?php echo $order['item_id']; ?>"
+                                        data-book-id="<?php echo $order['book_id']; ?>"
+                                        data-title="<?php echo htmlspecialchars($order['title']); ?>"
+                                        data-author="<?php echo htmlspecialchars($order['author']); ?>"
+                                        data-image="<?php echo htmlspecialchars(!empty($order['cover_image']) ? $order['cover_image'] : 'uploads/covers/default_book.jpg'); ?>"
+                                        data-type="<?php echo htmlspecialchars($order['purchase_type']); ?>"
+                                        data-weeks="<?php echo (int)($order['rental_weeks'] ?? 0); ?>"
+                                        data-price="<?php echo number_format($order['unit_price'], 2); ?>"
+                                        data-seller="<?php echo htmlspecialchars(!empty($order['seller_username']) ? $order['seller_username'] : ($order['seller_firstname'] . ' ' . $order['seller_lastname'])); ?>">
+                                    Order Received
+                                </button>
                                 <?php endif; ?>
                                 
                                 <a href="order_details.php?id=<?php echo $order['order_id']; ?>" class="order-action-btn btn-view-details">
@@ -1077,20 +1133,32 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             <div class="order-date">Rental started: <?php echo date('F j, Y', strtotime($rental['rental_date'])); ?></div>
                                 <div class="order-number">Rental #<?php echo $rental['rental_id']; ?></div>
                             </div>
-                            <div class="order-status status-to-receive">
+                            <div class="order-status">
                                 <?php 
                                 $statusClass = '';
                                 $statusText = ucfirst($rental['status']);
                                 
                                 switch ($rental['status']) {
                                     case 'active':
-                                        $statusClass = 'status-to-receive';
+                                        $isOverdue = (strtotime($rental['due_date']) < time());
+                                        $statusClass = $isOverdue ? 'status-to-pay' : 'status-to-receive';
+                                        $statusText = $isOverdue ? 'Overdue' : 'Active';
+                                        break;
+                                    case 'return_pending':
+                                        $statusClass = 'status-to-ship';
+                                        $statusText = 'Return Pending';
                                         break;
                                     case 'overdue':
                                         $statusClass = 'status-to-pay';
+                                        $statusText = 'Overdue';
+                                        break;
+                                    case 'returned':
+                                        $statusClass = 'status-completed';
+                                        $statusText = 'Returned';
                                         break;
                                     default:
                                         $statusClass = 'status-to-ship';
+                                        $statusText = ucfirst($rental['status']);
                                 }
                                 ?>
                                 <span class="<?php echo $statusClass; ?>"><?php echo $statusText; ?></span>
@@ -1099,7 +1167,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                         
                         <div class="order-body">
                             <div class="order-item">
-                                <img src="<?php echo $rental['cover_image']; ?>" alt="<?php echo $rental['title']; ?>" class="item-image">
+                                <img src="<?php echo $rental['cover_image']; ?>" alt="<?php echo $rental['title']; ?>" class="item-image" onerror="this.src='img/default-book-cover.jpg'">
                                 
                                 <div class="item-details">
                                     <div class="item-title"><?php echo $rental['title']; ?></div>
@@ -1120,7 +1188,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                                         <span class="ms-2 text-muted">
                                             (<?php echo $rental['rental_weeks']; ?> week<?php echo $rental['rental_weeks'] > 1 ? 's' : ''; ?> rental)
                                         </span>
-                                        <?php if (strtotime($rental['due_date']) < time()): ?>
+                                        <?php if (strtotime($rental['due_date']) < time() && $rental['status'] !== 'returned'): ?>
                                         <span class="text-danger fw-bold ms-2">OVERDUE</span>
                                         <?php endif; ?>
                                     </div>
@@ -1138,21 +1206,40 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             </div>
                             
                             <div class="order-actions">
-                            <a href="#" class="order-action-btn btn-confirm-receipt btn-return-book"
-                            data-bs-toggle="modal" 
-                            data-bs-target="#returnBookModal"
-                            data-rental-id="<?php echo $rental['rental_id']; ?>"
-                            data-book-title="<?php echo htmlspecialchars($rental['title']); ?>"
-                            data-book-author="<?php echo htmlspecialchars($rental['author']); ?>"
-                            data-book-image="<?php echo $rental['cover_image']; ?>"
-                            data-due-date="<?php echo date('F j, Y', strtotime($rental['due_date'])); ?>"
-                            data-is-overdue="<?php echo (strtotime($rental['due_date']) < time()) ? 'true' : 'false'; ?>"
-                            data-seller-id="<?php echo $rental['seller_id']; ?>">
-                                Return Book
-                            </a>
-                            <a href="rented_books.php?action=extend&rental_id=<?php echo $rental['rental_id']; ?>" class="order-action-btn btn-view-details">
-                                Extend Rental
-                            </a>
+                            <button type="button" 
+                                    class="order-action-btn btn-view-details btn-view-agreement-qr"
+                                    data-order-id="<?php echo $rental['order_id'] ?? 0; ?>"
+                                    data-rental-id="<?php echo $rental['rental_id']; ?>"
+                                    data-title="<?php echo htmlspecialchars($rental['title']); ?>"
+                                    data-author="<?php echo htmlspecialchars($rental['author']); ?>"
+                                    data-condition="<?php echo htmlspecialchars(ucfirst($rental['book_condition'] ?? 'Good')); ?>"
+                                    data-start="<?php echo date('M j, Y', strtotime($rental['rental_date'])); ?>"
+                                    data-due="<?php echo date('M j, Y', strtotime($rental['due_date'])); ?>"
+                                    data-fee="<?php echo number_format($rental['total_price'], 2); ?>"
+                                    data-seller="<?php echo htmlspecialchars(!empty($rental['username']) ? $rental['username'] : ($rental['firstname'] . ' ' . $rental['lastname'])); ?>">
+                                Return QR
+                            </button>
+                            <?php if ($rental['status'] === 'return_pending'): ?>
+                                <span class="badge bg-light text-secondary border px-3 py-2 d-inline-flex align-items-center" style="font-size: 0.8rem;">
+                                    <i class="fas fa-clock me-1 text-warning"></i> Return Pending Handover
+                                </span>
+                            <?php else: ?>
+                                <a href="#" class="order-action-btn btn-confirm-receipt btn-return-book"
+                                data-bs-toggle="modal" 
+                                data-bs-target="#returnBookModal"
+                                data-rental-id="<?php echo $rental['rental_id']; ?>"
+                                data-book-title="<?php echo htmlspecialchars($rental['title']); ?>"
+                                data-book-author="<?php echo htmlspecialchars($rental['author']); ?>"
+                                data-book-image="<?php echo $rental['cover_image']; ?>"
+                                data-due-date="<?php echo date('F j, Y', strtotime($rental['due_date'])); ?>"
+                                data-is-overdue="<?php echo (strtotime($rental['due_date']) < time()) ? 'true' : 'false'; ?>"
+                                data-seller-id="<?php echo $rental['seller_id']; ?>">
+                                    Return Book
+                                </a>
+                                <a href="rented_books.php?action=extend&rental_id=<?php echo $rental['rental_id']; ?>" class="order-action-btn btn-view-details">
+                                    Extend Rental
+                                </a>
+                            <?php endif; ?>
                         </div>
                     </div>
                     </div>
@@ -1174,165 +1261,180 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
     </div>
               
     
+    <!-- Simple & Clean Return Book Modal (Icon-free, Meet-up ready) -->
     <div class="modal fade" id="returnBookModal" tabindex="-1" aria-labelledby="returnBookModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="returnBookModalLabel">Return Book</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <form action="process_return.php" method="POST">
-                <input type="hidden" name="rental_id" id="return_rental_id" value="">
-                <input type="hidden" name="action" value="initiate_return">
+        <div class="modal-dialog modal-dialog-centered return-modal-dialog">
+            <div class="modal-content" style="border-radius: 10px; border: 1px solid #e9ecef; box-shadow: 0 10px 25px rgba(0,0,0,0.08);">
+                <div class="modal-header py-3 px-4" style="background: #ffffff; border-bottom: 1px solid #f1f5f9;">
+                    <div>
+                        <h5 class="modal-title fw-bold mb-0" id="returnBookModalLabel" style="font-size: 1.05rem; color: #0f172a;">
+                            Return Book
+                        </h5>
+                        <p class="text-muted mb-0" style="font-size: 0.8rem;">Select handover method and meet-up place</p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="font-size: 0.75rem;"></button>
+                </div>
                 
-                <div class="modal-body">
-                    <div class="return-book-info mb-4">
-                        <div class="d-flex align-items-start">
-                            <img src="" id="return_book_image" alt="Book Cover" class="me-3" style="width: 80px; height: 120px; object-fit: cover;">
-                            <div>
-                                <h4 id="return_book_title"></h4>
-                                <p class="text-muted" id="return_book_author"></p>
-                                <p>Rental Due Date: <span id="return_due_date" class="fw-bold"></span></p>
-                                <div id="overdue_notice" class="alert alert-danger d-none">
-                                    <i class="fas fa-exclamation-triangle me-2"></i> This book is overdue!
+                <form action="process_return.php" method="POST" id="formReturnBook">
+                    <input type="hidden" name="rental_id" id="return_rental_id" value="">
+                    <input type="hidden" name="action" value="initiate_return">
+                    
+                    <div class="modal-body px-4 py-3">
+                        <!-- Book Preview & Due Date -->
+                        <div class="d-flex align-items-center gap-3 p-2-5 mb-3" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                            <img src="" id="return_book_image" alt="Book Cover" style="width: 44px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1; flex-shrink: 0;" onerror="this.src='img/default-book-cover.jpg'">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="fw-bold text-truncate" id="return_book_title" style="font-size: 0.9rem; color: #0f172a;"></div>
+                                <div class="text-muted mb-1" id="return_book_author" style="font-size: 0.78rem;"></div>
+                                <div style="font-size: 0.78rem;">
+                                    Due Date: <span id="return_due_date" class="fw-semibold text-dark"></span>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <div class="return-steps">
-                        <h5 class="mb-3">Select Return Method</h5>
-                        
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="radio" name="return_method" id="return_dropoff" value="dropoff" checked>
-                            <label class="form-check-label" for="return_dropoff">
-                                <strong>Drop-off</strong> - Return the book at one of our locations
+                        <!-- Overdue Alert (Dynamically Shown/Hidden) -->
+                        <div id="overdue_notice" class="alert alert-danger py-2 px-3 mb-3 d-none" style="font-size: 0.8rem; border-radius: 6px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b;">
+                            This rental is past its due date. Please return promptly to prevent additional fees.
+                        </div>
+
+                        <!-- Return Method Buttons (Simple & Clean, No Icons) -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold mb-2" style="font-size: 0.78rem; color: #0f172a; text-transform: uppercase;">
+                                Handover Method
                             </label>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="return-method-btn active" id="method_btn_dropoff" onclick="selectReturnMethod('dropoff')">
+                                    Drop-off / Meet-up
+                                </button>
+                                <button type="button" class="return-method-btn" id="method_btn_pickup" onclick="selectReturnMethod('pickup')">
+                                    Courier Pickup (₱50)
+                                </button>
+                            </div>
+                            <input class="d-none" type="radio" name="return_method" id="return_dropoff" value="dropoff" checked>
+                            <input class="d-none" type="radio" name="return_method" id="return_pickup" value="pickup">
                         </div>
-                        
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="radio" name="return_method" id="return_pickup" value="pickup">
-                            <label class="form-check-label" for="return_pickup">
-                                <strong>Pickup</strong> - We'll pick up the book from your address (₱50 fee)
+
+                        <!-- Drop-off & Meet-up Section -->
+                        <div id="dropoff_locations" class="mb-3">
+                            <label class="form-label fw-semibold mb-1" style="font-size: 0.8rem; color: #475569;">
+                                Meet-up / Drop-off Place
                             </label>
-                        </div>
-                        
-                        <!-- Drop-off Locations -->
-                        <div id="dropoff_locations" class="mb-4">
-                            <h6 class="mt-4 mb-3">Select Drop-off Location</h6>
-                            <div class="row" id="dropoff_locations_container">
-                                <!-- Dropoff locations will be loaded here -->
-                            </div>
-                        </div>
-                        
-                        <!-- Pickup Schedule (hidden by default) -->
-                        <div id="pickup_schedule" class="mb-4 d-none">
-                            <h6 class="mt-4 mb-3">Schedule Pickup</h6>
                             
-                            <div class="mb-3">
-                                <label for="pickup_date" class="form-label">Pickup Date</label>
-                                <input type="date" class="form-control" id="pickup_date" name="pickup_date" min="" required disabled>
-                                <small class="text-muted">We need at least 1 day notice for pickup</small>
+                            <div id="dropoff_locations_container">
+                                <div class="text-center text-muted py-2" style="font-size: 0.8rem;">Loading location options...</div>
                             </div>
-                            
-                            <div class="mb-3">
-                                <label for="pickup_time" class="form-label">Preferred Time Slot</label>
-                                <select class="form-select" id="pickup_time" name="pickup_time" required disabled>
-                                    <option value="">Select a time slot</option>
-                                    <option value="morning">Morning (9AM - 12PM)</option>
-                                    <option value="afternoon">Afternoon (1PM - 5PM)</option>
-                                    <option value="evening">Evening (6PM - 8PM)</option>
-                                </select>
+
+                            <!-- Meet-up Note Input as requested: Note: [Campus Meet-up] -->
+                            <div class="mt-2">
+                                <label for="dropoff_notes" class="form-label fw-semibold mb-1" style="font-size: 0.78rem; color: #475569;">
+                                    Meet-up Details / Note (Optional)
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="dropoff_notes" name="dropoff_notes" placeholder="e.g. Note: [Campus Meet-up: Main Library Ground Floor at 2 PM]" style="font-size: 0.82rem;">
+                                <div class="d-flex flex-wrap align-items-center gap-1 mt-1 pt-1">
+                                    <span class="text-muted" style="font-size: 0.72rem;">Quick presets:</span>
+                                    <button type="button" class="btn btn-light border py-0 px-1" style="font-size: 0.72rem; line-height: 1.5;" onclick="setMeetupNote('Campus Library Lobby')">Library Lobby</button>
+                                    <button type="button" class="btn btn-light border py-0 px-1" style="font-size: 0.72rem; line-height: 1.5;" onclick="setMeetupNote('Main Campus Gate')">Main Gate</button>
+                                    <button type="button" class="btn btn-light border py-0 px-1" style="font-size: 0.72rem; line-height: 1.5;" onclick="setMeetupNote('Student Center')">Student Center</button>
+                                    <button type="button" class="btn btn-light border py-0 px-1" style="font-size: 0.72rem; line-height: 1.5;" onclick="setMeetupNote('College Cafeteria')">Cafeteria</button>
+                                </div>
+                                <div class="text-muted mt-1" style="font-size: 0.73rem;">
+                                    Add your agreed meet-up location or specific time on campus.
+                                </div>
                             </div>
-                            
-                            <div class="mb-3">
-                                <label for="pickup_address" class="form-label">Pickup Address</label>
-                                <textarea class="form-control" id="pickup_address" name="pickup_address" rows="3" placeholder="Enter your complete pickup address" required disabled></textarea>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="pickup_notes" class="form-label">Additional Instructions (Optional)</label>
-                                <textarea class="form-control" id="pickup_notes" name="pickup_notes" rows="2" placeholder="Gate code, landmark, etc." disabled></textarea>
-                            </div>
-                            
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle me-2"></i> A pickup fee of ₱50 will be added to your account.
+
+                            <!-- Simple Clean Tip -->
+                            <div class="p-2 mt-2" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 0.77rem; color: #475569;">
+                                <strong>Tip:</strong> Present your <strong>Return QR</strong> during meet-up for immediate verification by the seller.
                             </div>
                         </div>
-                        
-                        <div class="mb-4">
-                            <h6 class="mb-3">Book Condition Declaration</h6>
-                            <div class="form-check mb-2">
+
+                        <!-- Pickup Section (Hidden by default) -->
+                        <div id="pickup_schedule" class="mb-3 d-none">
+                            <div class="row g-2 mb-2">
+                                <div class="col-6">
+                                    <label for="pickup_date" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Pickup Date</label>
+                                    <input type="date" class="form-control form-control-sm" id="pickup_date" name="pickup_date" min="" style="font-size: 0.82rem;" disabled>
+                                </div>
+                                <div class="col-6">
+                                    <label for="pickup_time" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Time Slot</label>
+                                    <select class="form-select form-select-sm" id="pickup_time" name="pickup_time" style="font-size: 0.82rem;" disabled>
+                                        <option value="">Select time</option>
+                                        <option value="morning">Morning (9AM - 12PM)</option>
+                                        <option value="afternoon">Afternoon (1PM - 5PM)</option>
+                                        <option value="evening">Evening (6PM - 8PM)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="pickup_address" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Pickup Address</label>
+                                <textarea class="form-control form-control-sm" id="pickup_address" name="pickup_address" rows="2" placeholder="Complete address for courier collection" style="font-size: 0.82rem;" disabled></textarea>
+                            </div>
+                            <div class="mb-2">
+                                <label for="pickup_notes" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Notes / Landmark (Optional)</label>
+                                <input type="text" class="form-control form-control-sm" id="pickup_notes" name="pickup_notes" placeholder="Landmark, gate code, etc." style="font-size: 0.82rem;" disabled>
+                            </div>
+                            <div class="text-muted" style="font-size: 0.75rem;">
+                                Note: A ₱50 courier fee will be charged for doorstep pickup.
+                            </div>
+                        </div>
+
+                        <!-- Book Condition Declaration Checkbox -->
+                        <div class="p-2-5" style="background: #ffffff; border: 1px solid #e9ecef; border-radius: 6px;">
+                            <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="condition_checkbox" name="condition_confirmation" required>
-                                <label class="form-check-label" for="condition_checkbox">
-                                    I confirm that the book is in good condition with no significant damage beyond normal wear and tear.
+                                <label class="form-check-label text-dark" for="condition_checkbox" style="font-size: 0.82rem;">
+                                    I confirm the book is complete and ready for return inspection.
                                 </label>
                             </div>
-                            <small class="text-muted">
-                                Note: The book will be inspected when received. Additional charges may apply if the book is damaged.
-                                See our <a href="#" data-bs-toggle="modal" data-bs-target="#damagePolicy">damage policy</a> for details.
-                            </small>
+                            <div class="text-muted mt-1 ps-4" style="font-size: 0.74rem;">
+                                Subject to seller inspection upon receipt. <a href="#" data-bs-toggle="modal" data-bs-target="#damagePolicy" class="text-primary text-decoration-none">View Damage Policy</a>
+                            </div>
                         </div>
                     </div>
-                </div>
-                
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Submit Return Request</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
 
-<!-- Damage Policy Modal -->
-<div class="modal fade" id="damagePolicy" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Book Damage Policy</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <h6>Normal Wear and Tear (No Charge)</h6>
-                <ul>
-                    <li>Minor creases on the spine</li>
-                    <li>Slight page yellowing</li>
-                    <li>Minor dog-eared corners</li>
-                    <li>Slight fading of cover</li>
-                </ul>
-                
-                <h6>Minor Damage (25% of Book Value)</h6>
-                <ul>
-                    <li>Water stains (not affecting readability)</li>
-                    <li>Torn pages (that don't affect content)</li>
-                    <li>Writing/highlighting on fewer than 10 pages</li>
-                    <li>Cover damage that doesn't affect the book's integrity</li>
-                </ul>
-                
-                <h6>Significant Damage (50% of Book Value)</h6>
-                <ul>
-                    <li>Multiple pages with writing/highlighting</li>
-                    <li>Broken spine that's still intact</li>
-                    <li>Moderate water damage</li>
-                    <li>Torn cover</li>
-                </ul>
-                
-                <h6>Severe Damage (Full Book Value)</h6>
-                <ul>
-                    <li>Missing pages</li>
-                    <li>Completely detached cover or spine</li>
-                    <li>Extensive water damage affecting readability</li>
-                    <li>Mold or pest damage</li>
-                    <li>Book not returned within 30 days of due date</li>
-                </ul>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <div class="modal-footer px-4 py-2" style="background: #fafbfc; border-top: 1px solid #f1f5f9;">
+                        <button type="button" class="btn btn-light btn-sm border" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-warning btn-sm text-white fw-bold px-3">
+                            Submit Return Request
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
-</div>
+
+    <!-- Damage Policy Modal - Clean & Simple -->
+    <div class="modal fade" id="damagePolicy" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 480px;">
+            <div class="modal-content" style="border-radius: 10px; border: 1px solid #e9ecef; box-shadow: 0 10px 25px rgba(0,0,0,0.08);">
+                <div class="modal-header py-3 px-4" style="background: #ffffff; border-bottom: 1px solid #f1f5f9;">
+                    <h5 class="modal-title fw-bold mb-0" style="font-size: 1rem; color: #0f172a;">Book Damage Policy</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="font-size: 0.75rem;"></button>
+                </div>
+                <div class="modal-body px-4 py-3" style="font-size: 0.82rem;">
+                    <div class="mb-2 p-2-5 border rounded" style="background: #f8fafc;">
+                        <div class="fw-bold text-success mb-1">Normal Wear & Tear (No Charge)</div>
+                        <div class="text-muted">Minor spine creases, slight page yellowing, or minor corner scuffs.</div>
+                    </div>
+                    <div class="mb-2 p-2-5 border rounded" style="background: #f8fafc;">
+                        <div class="fw-bold text-primary mb-1">Minor Damage (25% Book Value)</div>
+                        <div class="text-muted">Small water spots not affecting readability, light pen marks on fewer than 5 pages.</div>
+                    </div>
+                    <div class="mb-2 p-2-5 border rounded" style="background: #f8fafc;">
+                        <div class="fw-bold text-warning mb-1">Significant Damage (50% Book Value)</div>
+                        <div class="text-muted">Torn pages, broken spine, or heavy highlighting across multiple chapters.</div>
+                    </div>
+                    <div class="p-2-5 border rounded" style="background: #fef2f2; border-color: #fecaca !important;">
+                        <div class="fw-bold text-danger mb-1">Severe Damage / Lost (Full Book Value)</div>
+                        <div class="text-muted">Missing pages, mold, detached cover, or failure to return within 30 days of due date.</div>
+                    </div>
+                </div>
+                <div class="modal-footer px-4 py-2" style="background: #fafbfc; border-top: 1px solid #f1f5f9;">
+                    <button type="button" class="btn btn-light btn-sm border" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -1359,59 +1461,89 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                 });
             }
             
-            // Helper to render default drop-off locations
+            // Meet-up quick presets helper
+            window.setMeetupNote = function(preset) {
+                const noteInput = document.getElementById('dropoff_notes');
+                if (noteInput) {
+                    noteInput.value = `Note: [Campus Meet-up: ${preset}]`;
+                    noteInput.focus();
+                }
+            };
+
+            // Method card click handler
+            window.selectReturnMethod = function(method) {
+                const radio = document.querySelector(`input[name="return_method"][value="${method}"]`);
+                if (radio) {
+                    radio.checked = true;
+                    radio.dispatchEvent(new Event('change'));
+                }
+                const btnDropoff = document.getElementById('method_btn_dropoff');
+                const btnPickup = document.getElementById('method_btn_pickup');
+                if (method === 'dropoff') {
+                    if (btnDropoff) btnDropoff.classList.add('active');
+                    if (btnPickup) btnPickup.classList.remove('active');
+                } else {
+                    if (btnPickup) btnPickup.classList.add('active');
+                    if (btnDropoff) btnDropoff.classList.remove('active');
+                }
+            };
+
+            // Helper to render default drop-off / meet-up locations
             function renderDefaultDropoffLocations(container, sellerData) {
                 let html = '';
-                if (sellerData && sellerData.success && sellerData.address) {
-                    // Compose the full address string
-                    const sellerFullAddress = `${sellerData.address.name}, ${sellerData.address.address}, ${sellerData.address.city} ${sellerData.address.postal_code}`;
-                    html += `
-                        <div class="col-md-6 mb-3">
-                            <div class="card h-100">
-                                <div class="card-body">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="dropoff_location" id="seller_location" value="${sellerFullAddress.replace(/"/g, '&quot;')}" checked>
-                                        <label class="form-check-label" for="seller_location">
-                                            <strong>Seller's Location</strong><br>
-                                            ${sellerData.address.name}<br>
-                                            ${sellerData.address.address}<br>
-                                            ${sellerData.address.city} ${sellerData.address.postal_code}<br>
-                                            Contact: ${sellerData.address.contact_person}
-                                        </label>
+
+                // Option 1: Campus Meet-up (Recommended)
+                html += `
+                    <div class="mb-2">
+                        <label class="loc-option-label d-block cursor-pointer" for="loc_campus">
+                            <div class="d-flex align-items-start gap-2">
+                                <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="loc_campus" value="Campus Meet-up" checked>
+                                <div style="font-size: 0.82rem; line-height: 1.4;">
+                                    <div class="fw-bold text-dark">Campus Meet-up <span class="badge bg-light text-primary border ms-1" style="font-size: 0.68rem;">Recommended</span></div>
+                                    <div class="text-muted" style="font-size: 0.77rem;">
+                                        Direct student-to-student handover on campus (Library lobby, student lounge, or main gate).
                                     </div>
                                 </div>
                             </div>
+                        </label>
+                    </div>
+                `;
+
+                // Option 2: Seller's Registered Location (if available)
+                if (sellerData && sellerData.success && sellerData.address) {
+                    const sellerFullAddress = `${sellerData.address.name}, ${sellerData.address.address}, ${sellerData.address.city} ${sellerData.address.postal_code}`;
+                    html += `
+                        <div class="mb-2">
+                            <label class="loc-option-label d-block cursor-pointer" for="seller_location">
+                                <div class="d-flex align-items-start gap-2">
+                                    <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="seller_location" value="${sellerFullAddress.replace(/"/g, '&quot;')}">
+                                    <div style="font-size: 0.82rem; line-height: 1.4;">
+                                        <div class="fw-bold text-dark">${sellerData.address.name} <span class="badge bg-light text-dark border ms-1" style="font-size: 0.68rem;">Seller Location</span></div>
+                                        <div class="text-muted" style="font-size: 0.77rem;">
+                                            ${sellerData.address.address}, ${sellerData.address.city} ${sellerData.address.postal_code}
+                                            ${sellerData.address.contact_person ? ` • Contact: ${sellerData.address.contact_person}` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            </label>
                         </div>
                     `;
                 }
+
+                // Option 3: BookWagon Official Hub
                 html += `
-                    <div class="col-md-6 mb-3">
-                        <div class="card h-100">
-                            <div class="card-body">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="radio" name="dropoff_location" id="location1" value="Main Office, 123 Book Street, Manila" ${(!sellerData || !sellerData.success) ? 'checked' : ''}>
-                                    <label class="form-check-label" for="location1">
-                                        <strong>Main Office</strong><br>
-                                        123 Book Street, Manila<br>
-                                        Mon-Fri: 9AM-6PM, Sat: 10AM-2PM
-                                    </label>
+                    <div class="mb-1">
+                        <label class="loc-option-label d-block cursor-pointer" for="location1">
+                            <div class="d-flex align-items-start gap-2">
+                                <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="location1" value="BookWagon Hub, 123 Book Street, Manila">
+                                <div style="font-size: 0.82rem; line-height: 1.4;">
+                                    <div class="fw-bold text-dark">BookWagon Main Hub <span class="badge bg-light text-dark border ms-1" style="font-size: 0.68rem;">Official Hub</span></div>
+                                    <div class="text-muted" style="font-size: 0.77rem;">
+                                        123 Book Street, Manila • Mon-Fri: 9AM-6PM, Sat: 10AM-2PM
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <div class="card h-100">
-                            <div class="card-body">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="radio" name="dropoff_location" id="location2" value="Downtown Branch, 456 Reading Ave, Quezon City">
-                                    <label class="form-check-label" for="location2">
-                                        <strong>Downtown Branch</strong><br>
-                                        456 Reading Ave, Quezon City<br>
-                                        Mon-Sun: 10AM-7PM
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
+                        </label>
                     </div>
                 `;
                 container.innerHTML = html;
@@ -1435,21 +1567,32 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                     // Set values in the modal
                     document.getElementById('return_rental_id').value = rentalId;
                     document.getElementById('return_book_title').innerText = bookTitle;
-                    document.getElementById('return_book_author').innerText = bookAuthor;
-                    document.getElementById('return_book_image').src = bookImage;
+                    document.getElementById('return_book_author').innerText = bookAuthor ? `by ${bookAuthor}` : '';
+                    document.getElementById('return_book_image').src = bookImage || 'img/default-book-cover.jpg';
                     document.getElementById('return_due_date').innerText = dueDate;
+                    
+                    // Reset condition checkbox
+                    const condBox = document.getElementById('condition_checkbox');
+                    if (condBox) condBox.checked = false;
+
+                    // Reset to dropoff by default
+                    if (window.selectReturnMethod) {
+                        window.selectReturnMethod('dropoff');
+                    }
                     
                     // Show overdue notice if applicable
                     const overdueNotice = document.getElementById('overdue_notice');
-                    if (isOverdue) {
-                        overdueNotice.classList.remove('d-none');
-                    } else {
-                        overdueNotice.classList.add('d-none');
+                    if (overdueNotice) {
+                        if (isOverdue) {
+                            overdueNotice.classList.remove('d-none');
+                        } else {
+                            overdueNotice.classList.add('d-none');
+                        }
                     }
                     
                     // Fetch seller's address and update dropoff locations
                     const container = document.getElementById('dropoff_locations_container');
-                    container.innerHTML = '<div class="text-center text-muted">Loading drop-off locations...</div>';
+                    container.innerHTML = '<div class="text-center text-muted py-2" style="font-size: 0.8rem;">Loading location details...</div>';
 
                     fetch(`get_seller_address.php?seller_id=${sellerId}`)
                         .then(response => response.json())
@@ -1467,13 +1610,19 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
             const returnMethodRadios = document.querySelectorAll('input[name="return_method"]');
             const dropoffLocations = document.getElementById('dropoff_locations');
             const pickupSchedule = document.getElementById('pickup_schedule');
-            const pickupFields = pickupSchedule.querySelectorAll('input, select, textarea');
+            const pickupFields = pickupSchedule ? pickupSchedule.querySelectorAll('input, select, textarea') : [];
                 
             returnMethodRadios.forEach(radio => {
                 radio.addEventListener('change', function() {
-                    if (this.value === 'dropoff') {
-                        dropoffLocations.classList.remove('d-none');
-                        pickupSchedule.classList.add('d-none');
+                    const method = this.value;
+                    const btnDropoff = document.getElementById('method_btn_dropoff');
+                    const btnPickup = document.getElementById('method_btn_pickup');
+
+                    if (method === 'dropoff') {
+                        if (btnDropoff) btnDropoff.classList.add('active');
+                        if (btnPickup) btnPickup.classList.remove('active');
+                        if (dropoffLocations) dropoffLocations.classList.remove('d-none');
+                        if (pickupSchedule) pickupSchedule.classList.add('d-none');
                         
                         // Disable pickup fields to prevent form submission
                         pickupFields.forEach(field => {
@@ -1481,8 +1630,10 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             field.required = false;
                         });
                     } else {
-                        dropoffLocations.classList.add('d-none');
-                        pickupSchedule.classList.remove('d-none');
+                        if (btnPickup) btnPickup.classList.add('active');
+                        if (btnDropoff) btnDropoff.classList.remove('active');
+                        if (dropoffLocations) dropoffLocations.classList.add('d-none');
+                        if (pickupSchedule) pickupSchedule.classList.remove('d-none');
                         
                         // Enable pickup fields
                         pickupFields.forEach(field => {
@@ -1502,7 +1653,248 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                 tomorrow.setDate(tomorrow.getDate() + 1);
                 pickupDateField.min = tomorrow.toISOString().split('T')[0];
             }
+
+            // Helper for safe element assignment
+            function safeSet(id, prop, value) {
+                const el = document.getElementById(id);
+                if (el) {
+                    el[prop] = value;
+                }
+            }
+
+            // ========================================================
+            // Book Condition Documentation & Order Received Logic
+            // ========================================================
+            const receiveButtons = document.querySelectorAll('.btn-receive-with-inspection');
+
+            receiveButtons.forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const orderId = this.getAttribute('data-order-id') || '';
+                    const itemId = this.getAttribute('data-item-id') || '';
+                    const title = this.getAttribute('data-title') || '';
+                    const author = this.getAttribute('data-author') || '';
+                    const image = this.getAttribute('data-image') || '';
+                    const type = this.getAttribute('data-type') || '';
+                    const weeks = this.getAttribute('data-weeks') || '1';
+                    const seller = this.getAttribute('data-seller') || '';
+
+                    safeSet('modal_order_id', 'value', orderId);
+                    safeSet('modal_item_id', 'value', itemId);
+                    safeSet('modal_book_title', 'innerText', title);
+                    safeSet('modal_book_author', 'innerText', author);
+                    safeSet('modal_book_seller', 'innerText', seller);
+                    safeSet('modal_book_image', 'src', image);
+
+                    const typeBadge = document.getElementById('modal_type_badge');
+                    if (typeBadge) {
+                        if (type === 'rent') {
+                            typeBadge.innerText = `Rental (${weeks} ${weeks > 1 ? 'weeks' : 'week'})`;
+                            typeBadge.className = 'badge bg-warning text-dark border';
+                        } else {
+                            typeBadge.innerText = 'Purchase';
+                            typeBadge.className = 'badge bg-light text-secondary border';
+                        }
+                    }
+
+                    // Reset checklist checkboxes
+                    document.querySelectorAll('.check-inspect').forEach(cb => cb.checked = false);
+
+                    const modalEl = document.getElementById('conditionInspectionModal');
+                    if (modalEl && typeof bootstrap !== 'undefined') {
+                        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+                        modalInstance.show();
+                    }
+                });
+            });
+
+            // ========================================================
+            // Rental Return QR Code Modal Logic
+            // ========================================================
+            const viewQrButtons = document.querySelectorAll('.btn-view-agreement-qr');
+
+            viewQrButtons.forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const orderId = this.getAttribute('data-order-id') || '';
+                    const rentalId = this.getAttribute('data-rental-id') || '';
+                    const title = this.getAttribute('data-title') || '';
+                    const author = this.getAttribute('data-author') || '';
+                    const condition = this.getAttribute('data-condition') || 'Good';
+                    const startDate = this.getAttribute('data-start') || 'N/A';
+                    const dueDate = this.getAttribute('data-due') || 'N/A';
+                    const seller = this.getAttribute('data-seller') || 'Owner';
+
+                    const payload = {
+                        cert: "BOOKWAGON_RENTAL_RETURN_RECEIPT",
+                        rental_id: rentalId,
+                        order_id: orderId,
+                        book: title,
+                        seller: seller,
+                        condition: condition,
+                        return_due: dueDate
+                    };
+
+                    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(JSON.stringify(payload))}`;
+
+                    safeSet('agreement_qr_img', 'src', qrUrl);
+                    safeSet('agreement_book_title', 'innerText', title);
+                    safeSet('agreement_meta_info', 'innerText', `by ${author} • Rental #${rentalId}`);
+                    safeSet('agreement_condition', 'innerText', condition);
+                    safeSet('agreement_timestamp', 'innerText', startDate);
+                    safeSet('agreement_due_date', 'innerText', dueDate);
+                    safeSet('agreement_deposit', 'innerText', 'Refundable upon return inspection');
+                    safeSet('agreement_hash', 'innerText', `BW-RETURN-${rentalId}-${orderId}`);
+
+                    const modalEl = document.getElementById('handoverAgreementModal');
+                    if (modalEl && typeof bootstrap !== 'undefined') {
+                        const modalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+                        modalInstance.show();
+                    }
+                });
+            });
         });
     </script>
+
+    <!-- Book Condition Inspection (Order Received) Modal - Clean & Simple -->
+    <div class="modal fade" id="conditionInspectionModal" tabindex="-1" aria-labelledby="conditionInspectionModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 10px; border: 1px solid #e9ecef;">
+                <div class="modal-header py-3 px-4" style="background: #ffffff; border-bottom: 1px solid #f1f5f9;">
+                    <div>
+                        <h5 class="modal-title fw-bold mb-0" id="conditionInspectionModalLabel" style="font-size: 1.05rem; color: #0f172a;">
+                            Book Condition Checklist
+                        </h5>
+                        <p class="text-muted mb-0" style="font-size: 0.8rem;">Please inspect the book before confirming delivery receipt.</p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                
+                <form action="rented_books.php" method="POST" id="formOrderReceive">
+                    <input type="hidden" name="action" value="confirm_order_received">
+                    <input type="hidden" name="order_id" id="modal_order_id" value="">
+                    <input type="hidden" name="item_id" id="modal_item_id" value="">
+                    
+                    <div class="modal-body px-4 py-3">
+                        <!-- Book Preview -->
+                        <div class="d-flex align-items-center gap-3 p-2 mb-3" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+                            <img src="" id="modal_book_image" alt="Cover" style="width: 44px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1;">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="fw-bold text-truncate mb-1" id="modal_book_title" style="font-size: 0.9rem; color: #0f172a;"></div>
+                                <div class="text-muted" style="font-size: 0.78rem;">
+                                    by <span id="modal_book_author"></span> • Seller: <span id="modal_book_seller"></span> • <span id="modal_type_badge" class="badge bg-light text-dark border">Rental</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Checklist -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold mb-2" style="font-size: 0.82rem; color: #0f172a; text-transform: uppercase;">
+                                Inspection Checklist
+                            </label>
+                            <div class="p-3" style="background: #ffffff; border: 1px solid #e9ecef; border-radius: 6px;">
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input check-inspect" type="checkbox" name="chk_cover" id="chk_cover" required>
+                                    <label class="form-check-label" for="chk_cover" style="font-size: 0.84rem;">
+                                        Cover is in good condition (no major stains or tears)
+                                    </label>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input check-inspect" type="checkbox" name="chk_pages" id="chk_pages" required>
+                                    <label class="form-check-label" for="chk_pages" style="font-size: 0.84rem;">
+                                        Pages are complete and readable
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input check-inspect" type="checkbox" name="chk_spine" id="chk_spine" required>
+                                    <label class="form-check-label" for="chk_spine" style="font-size: 0.84rem;">
+                                        Spine and binding are secure
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Rating & Notes -->
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">
+                                    Condition
+                                </label>
+                                <select name="book_condition" class="form-select form-select-sm" required style="font-size: 0.82rem;">
+                                    <option value="good" selected>Good</option>
+                                    <option value="excellent">Excellent</option>
+                                    <option value="fair">Fair</option>
+                                </select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">
+                                    Notes (Optional)
+                                </label>
+                                <input type="text" name="condition_notes" class="form-control form-control-sm" placeholder="Any remarks" style="font-size: 0.82rem;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer px-4 py-2" style="background: #fafbfc; border-top: 1px solid #f1f5f9;">
+                        <button type="button" class="btn btn-light btn-sm border" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-warning btn-sm text-white fw-bold px-3" id="btnSubmitInspection">
+                            Confirm Received
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rental Return QR Modal -->
+    <div class="modal fade" id="handoverAgreementModal" tabindex="-1" aria-labelledby="handoverAgreementModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content text-center" style="border-radius: 10px; border: 1px solid #e9ecef;">
+                <div class="modal-header justify-content-between py-3 px-4" style="background: #ffffff; border-bottom: 1px solid #f1f5f9;">
+                    <div class="text-start">
+                        <h5 class="modal-title fw-bold mb-0" id="handoverAgreementModalLabel" style="font-size: 1.05rem; color: #0f172a;">
+                            Rental Return QR
+                        </h5>
+                        <p class="text-muted mb-0" style="font-size: 0.8rem;">Present this QR to verify return and refund deposit.</p>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                
+                <div class="modal-body px-4 py-3">
+                    <div class="p-2 mb-3 d-inline-block" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+                        <img src="" id="agreement_qr_img" alt="Return QR Code" style="width: 170px; height: 170px; display: block; margin: 0 auto;">
+                    </div>
+                    
+                    <h6 class="fw-bold mb-1" id="agreement_book_title" style="color: #0f172a; font-size: 0.95rem;"></h6>
+                    <p class="text-muted mb-3" style="font-size: 0.8rem;" id="agreement_meta_info"></p>
+                    
+                    <div class="p-3 text-start mb-2" style="background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 6px; font-size: 0.82rem;">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted">Condition:</span>
+                            <strong class="text-dark" id="agreement_condition">Good</strong>
+                        </div>
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="text-muted">Return Due Date:</span>
+                            <strong class="text-dark" id="agreement_due_date"></strong>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span class="text-muted">Deposit Status:</span>
+                            <span class="text-success fw-semibold" id="agreement_deposit">Refundable upon return</span>
+                        </div>
+                        <div style="display: none;">
+                            <span id="agreement_timestamp"></span>
+                            <span id="agreement_hash"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="modal-footer justify-content-center px-4 py-2" style="background: #fafbfc; border-top: 1px solid #f1f5f9;">
+                    <button type="button" class="btn btn-warning btn-sm text-white fw-bold px-4" data-bs-dismiss="modal">
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

@@ -1,4 +1,4 @@
-﻿# Database config (contains credentials - NEVER commit this)
+# Database config (contains credentials - NEVER commit this)
 connect.php
 google_config.php
 
@@ -6,6 +6,7 @@ google_config.php
 uploads/
 
 # Debug / temp files
+scratch/
 debug.txt
 strip_inserts.py
 *.log

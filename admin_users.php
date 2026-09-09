@@ -25,65 +25,137 @@ $message = "";
 $current_user_id = $_SESSION['user_id'] ?? 0;
 
 // Handle actions
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'], $_POST['target_user_id'])) {
-    $target_id = (int)$_POST['target_user_id'];
-    
-    if ($target_id == $current_user_id) {
-        $message = "error|You cannot modify your own account.";
-    } else {
-        switch ($_POST['action']) {
-            case 'suspend':
-                $stmt = $pdo->prepare("UPDATE users SET status = 'suspended' WHERE id = :id");
-                if ($stmt->execute([':id' => $target_id])) {
-                    log_activity($current_user_id, 'User Suspended', "Suspended user ID: $target_id");
-                    $message = "success|User account has been suspended.";
-                }
-                break;
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action'])) {
+    if ($_POST['action'] === 'add_user') {
+        $fn = trim($_POST['firstname'] ?? '');
+        $ln = trim($_POST['lastname'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $password = trim($_POST['password'] ?? '');
+        $usertype = $_POST['usertype'] ?? 'user';
+        $status = $_POST['status'] ?? 'active';
 
-            case 'reactivate':
-                $stmt = $pdo->prepare("UPDATE users SET status = 'active' WHERE id = :id");
-                if ($stmt->execute([':id' => $target_id])) {
-                    log_activity($current_user_id, 'User Reactivated', "Reactivated user ID: $target_id");
-                    $message = "success|User account has been reactivated.";
+        if (empty($fn) || empty($ln) || empty($email) || empty($password)) {
+            $message = "error|Please fill in all required fields.";
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $message = "error|Please enter a valid email address.";
+        } else {
+            // Check duplicate email
+            $chk = $pdo->prepare("SELECT id FROM users WHERE email = :email");
+            $chk->execute([':email' => $email]);
+            if ($chk->fetch()) {
+                $message = "error|A user with that email already exists.";
+            } else {
+                $hash = password_hash($password, PASSWORD_BCRYPT);
+                $ins = $pdo->prepare("INSERT INTO users (firstname, lastname, email, password, usertype, status) VALUES (:fn, :ln, :email, :pass, :role, :status)");
+                if ($ins->execute([
+                    ':fn' => $fn,
+                    ':ln' => $ln,
+                    ':email' => $email,
+                    ':pass' => $hash,
+                    ':role' => $usertype,
+                    ':status' => $status
+                ])) {
+                    $newId = $pdo->lastInsertId();
+                    log_activity($current_user_id, 'User Created', "Admin created user ID: $newId ($email) with role $usertype");
+                    $message = "success|User created successfully.";
+                } else {
+                    $message = "error|Failed to create user.";
                 }
-                break;
+            }
+        }
+    } elseif (isset($_POST['target_user_id'])) {
+        $target_id = (int)$_POST['target_user_id'];
+        
+        if ($target_id == $current_user_id && $_POST['action'] !== 'edit_user') {
+            $message = "error|You cannot modify your own account.";
+        } else {
+            switch ($_POST['action']) {
+                case 'edit_user':
+                    $fn = trim($_POST['firstname'] ?? '');
+                    $ln = trim($_POST['lastname'] ?? '');
+                    $email = trim($_POST['email'] ?? '');
+                    $usertype = $_POST['usertype'] ?? 'user';
+                    $status = $_POST['status'] ?? 'active';
+                    $new_pass = trim($_POST['password'] ?? '');
 
-            case 'make_admin':
-                $stmt = $pdo->prepare("UPDATE users SET usertype = 'admin' WHERE id = :id");
-                if ($stmt->execute([':id' => $target_id])) {
-                    log_activity($current_user_id, 'Role Update', "Promoted user ID: $target_id to Admin");
-                    $message = "success|User promoted to Admin.";
-                }
-                break;
-
-            case 'make_user':
-                $stmt = $pdo->prepare("UPDATE users SET usertype = 'user' WHERE id = :id");
-                if ($stmt->execute([':id' => $target_id])) {
-                    log_activity($current_user_id, 'Role Update', "Demoted user ID: $target_id to User");
-                    $message = "success|User demoted to regular user.";
-                }
-                break;
-
-            case 'delete':
-                $confirm = $_POST['confirm_text'] ?? '';
-                if (strtoupper($confirm) === 'DELETE') {
-                    try {
-                        $stmt = $pdo->prepare("DELETE FROM users WHERE id = :id");
-                        if ($stmt->execute([':id' => $target_id])) {
-                            log_activity($current_user_id, 'User Deleted', "Permanently deleted user ID: $target_id");
-                            $message = "success|User permanently deleted.";
-                        }
-                    } catch (PDOException $e) {
-                        if ($e->getCode() == 23000) { // Integrity constraint violation
-                            $message = "error|Cannot delete this user because they have associated records (swaps, orders, etc.). Please Suspend the account instead.";
+                    if (empty($fn) || empty($ln) || empty($email)) {
+                        $message = "error|First name, last name, and email cannot be empty.";
+                    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                        $message = "error|Please enter a valid email address.";
+                    } else {
+                        // Check if email taken by another user
+                        $chk = $pdo->prepare("SELECT id FROM users WHERE email = :email AND id != :id");
+                        $chk->execute([':email' => $email, ':id' => $target_id]);
+                        if ($chk->fetch()) {
+                            $message = "error|That email is already in use by another user.";
                         } else {
-                            $message = "error|An error occurred while trying to delete the user: " . $e->getMessage();
+                            if (!empty($new_pass)) {
+                                $hash = password_hash($new_pass, PASSWORD_BCRYPT);
+                                $upd = $pdo->prepare("UPDATE users SET firstname = :fn, lastname = :ln, email = :email, usertype = :role, status = :status, password = :pass WHERE id = :id");
+                                $upd->execute([':fn' => $fn, ':ln' => $ln, ':email' => $email, ':role' => $usertype, ':status' => $status, ':pass' => $hash, ':id' => $target_id]);
+                            } else {
+                                $upd = $pdo->prepare("UPDATE users SET firstname = :fn, lastname = :ln, email = :email, usertype = :role, status = :status WHERE id = :id");
+                                $upd->execute([':fn' => $fn, ':ln' => $ln, ':email' => $email, ':role' => $usertype, ':status' => $status, ':id' => $target_id]);
+                            }
+                            log_activity($current_user_id, 'User Updated', "Admin updated user ID: $target_id ($email)");
+                            $message = "success|User details updated successfully.";
                         }
                     }
-                } else {
-                    $message = "error|You must type DELETE to confirm permanent deletion.";
-                }
-                break;
+                    break;
+
+                case 'suspend':
+                    $stmt = $pdo->prepare("UPDATE users SET status = 'suspended' WHERE id = :id");
+                    if ($stmt->execute([':id' => $target_id])) {
+                        log_activity($current_user_id, 'User Suspended', "Suspended user ID: $target_id");
+                        $message = "success|User account has been suspended.";
+                    }
+                    break;
+
+                case 'reactivate':
+                    $stmt = $pdo->prepare("UPDATE users SET status = 'active' WHERE id = :id");
+                    if ($stmt->execute([':id' => $target_id])) {
+                        log_activity($current_user_id, 'User Reactivated', "Reactivated user ID: $target_id");
+                        $message = "success|User account has been reactivated.";
+                    }
+                    break;
+
+                case 'make_admin':
+                    $stmt = $pdo->prepare("UPDATE users SET usertype = 'admin' WHERE id = :id");
+                    if ($stmt->execute([':id' => $target_id])) {
+                        log_activity($current_user_id, 'Role Update', "Promoted user ID: $target_id to Admin");
+                        $message = "success|User promoted to Admin.";
+                    }
+                    break;
+
+                case 'make_user':
+                    $stmt = $pdo->prepare("UPDATE users SET usertype = 'user' WHERE id = :id");
+                    if ($stmt->execute([':id' => $target_id])) {
+                        log_activity($current_user_id, 'Role Update', "Demoted user ID: $target_id to User");
+                        $message = "success|User demoted to regular user.";
+                    }
+                    break;
+
+                case 'delete':
+                    $confirm = $_POST['confirm_text'] ?? '';
+                    if (strtoupper($confirm) === 'DELETE') {
+                        try {
+                            $stmt = $pdo->prepare("DELETE FROM users WHERE id = :id");
+                            if ($stmt->execute([':id' => $target_id])) {
+                                log_activity($current_user_id, 'User Deleted', "Permanently deleted user ID: $target_id");
+                                $message = "success|User permanently deleted.";
+                            }
+                        } catch (PDOException $e) {
+                            if ($e->getCode() == 23000) { // Integrity constraint violation
+                                $message = "error|Cannot delete this user because they have associated records (swaps, orders, etc.). Please Suspend the account instead.";
+                            } else {
+                                $message = "error|An error occurred while trying to delete the user: " . $e->getMessage();
+                            }
+                        }
+                    } else {
+                        $message = "error|You must type DELETE to confirm permanent deletion.";
+                    }
+                    break;
+            }
         }
     }
 }
@@ -195,7 +267,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .detail-item-label { font-size: 11px; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
         .detail-item-value { font-size: 13px; font-weight: 600; color: var(--text-dark); }
 
-        /* Delete modal */
+        /* Modals */
         .modal-overlay {
             display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0,0,0,0.5); z-index: 200;
@@ -206,34 +278,148 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             background: #fff; border-radius: 16px; padding: 28px;
             max-width: 400px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
         }
+        .modal-box.wide { max-width: 520px; }
         .modal-box h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
         .modal-box p { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px; }
+        .modal-form-group { margin-bottom: 14px; text-align: left; }
+        .modal-form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-dark); margin-bottom: 5px; }
+        .modal-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .modal-input {
             width: 100%; padding: 10px 14px; border: 1px solid var(--border);
             border-radius: 8px; font-size: 13px; font-family: inherit;
-            margin-bottom: 16px; outline: none;
+            margin-bottom: 0; outline: none;
         }
-        .modal-input:focus { border-color: var(--danger); }
-        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+        .modal-input:focus { border-color: var(--primary); }
+        .modal-select {
+            width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+            border-radius: 8px; font-size: 13px; font-family: inherit;
+            outline: none; background: #fff;
+        }
+        .modal-select:focus { border-color: var(--primary); }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
         .modal-btn {
-            padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+            padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
             border: none; cursor: pointer; transition: all 0.15s;
         }
         .modal-btn.cancel { background: var(--bg); color: var(--text-muted); }
         .modal-btn.cancel:hover { background: var(--border); }
         .modal-btn.danger { background: var(--danger); color: #fff; }
         .modal-btn.danger:hover { background: #dc2626; }
+        .modal-btn.primary { background: var(--primary); color: #fff; }
+        .modal-btn.primary:hover { background: var(--primary-dark); }
 
         @media (max-width: 768px) {
             .user-stats { grid-template-columns: repeat(2, 1fr); }
             .toolbar { flex-direction: column; align-items: stretch; }
             .search-box { min-width: 100%; }
+            .modal-form-grid { grid-template-columns: 1fr; gap: 0; }
         }
     </style>
 </head>
 <body>
 
     <?php include "Admin/admin_sidebar.php"; ?>
+
+    <!-- Add User Modal -->
+    <div class="modal-overlay" id="addUserModal">
+        <div class="modal-box wide">
+            <h3 style="color: var(--text-dark);"><i class="fa-solid fa-user-plus" style="color: var(--primary); margin-right: 8px;"></i>Add New User</h3>
+            <p>Create a new registered user, seller, or administrator account.</p>
+            <form method="POST">
+                <input type="hidden" name="action" value="add_user">
+                <div class="modal-form-grid">
+                    <div class="modal-form-group">
+                        <label>First Name *</label>
+                        <input type="text" name="firstname" class="modal-input" placeholder="e.g. Maria" required>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>Last Name *</label>
+                        <input type="text" name="lastname" class="modal-input" placeholder="e.g. Santos" required>
+                    </div>
+                </div>
+                <div class="modal-form-group">
+                    <label>Email Address *</label>
+                    <input type="email" name="email" class="modal-input" placeholder="name@example.com" required>
+                </div>
+                <div class="modal-form-group">
+                    <label>Password *</label>
+                    <input type="password" name="password" class="modal-input" placeholder="Min. 8 characters" required>
+                </div>
+                <div class="modal-form-grid">
+                    <div class="modal-form-group">
+                        <label>Role Assignment *</label>
+                        <select name="usertype" class="modal-select">
+                            <option value="user">User (Customer)</option>
+                            <option value="seller">Seller</option>
+                            <option value="admin">Administrator</option>
+                        </select>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>Initial Status *</label>
+                        <select name="status" class="modal-select">
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-btn cancel" onclick="closeAddUserModal()">Cancel</button>
+                    <button type="submit" class="modal-btn primary"><i class="fa-solid fa-check" style="margin-right: 4px;"></i>Create User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit User Modal -->
+    <div class="modal-overlay" id="editUserModal">
+        <div class="modal-box wide">
+            <h3 style="color: var(--text-dark);"><i class="fa-solid fa-user-pen" style="color: var(--primary); margin-right: 8px;"></i>Edit User Details</h3>
+            <p>Update account profile, role permissions, or access status.</p>
+            <form method="POST">
+                <input type="hidden" name="action" value="edit_user">
+                <input type="hidden" name="target_user_id" id="editUserId">
+                <div class="modal-form-grid">
+                    <div class="modal-form-group">
+                        <label>First Name *</label>
+                        <input type="text" name="firstname" id="editFirstName" class="modal-input" required>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>Last Name *</label>
+                        <input type="text" name="lastname" id="editLastName" class="modal-input" required>
+                    </div>
+                </div>
+                <div class="modal-form-group">
+                    <label>Email Address *</label>
+                    <input type="email" name="email" id="editEmail" class="modal-input" required>
+                </div>
+                <div class="modal-form-group">
+                    <label>New Password <span style="font-weight: 400; color: var(--text-muted);">(Leave blank to keep current)</span></label>
+                    <input type="password" name="password" class="modal-input" placeholder="Optional new password">
+                </div>
+                <div class="modal-form-grid">
+                    <div class="modal-form-group">
+                        <label>Role Assignment *</label>
+                        <select name="usertype" id="editUserType" class="modal-select">
+                            <option value="user">User (Customer)</option>
+                            <option value="seller">Seller</option>
+                            <option value="admin">Administrator</option>
+                        </select>
+                    </div>
+                    <div class="modal-form-group">
+                        <label>Account Status *</label>
+                        <select name="status" id="editStatus" class="modal-select">
+                            <option value="active">Active</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-btn cancel" onclick="closeEditUserModal()">Cancel</button>
+                    <button type="submit" class="modal-btn primary"><i class="fa-solid fa-floppy-disk" style="margin-right: 4px;"></i>Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Delete Confirmation Modal -->
     <div class="modal-overlay" id="deleteModal">
@@ -243,7 +429,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <form method="POST" id="deleteForm">
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="target_user_id" id="deleteUserId">
-                <input type="text" name="confirm_text" class="modal-input" placeholder="Type DELETE to confirm" autocomplete="off" id="deleteConfirmInput">
+                <input type="text" name="confirm_text" class="modal-input" placeholder="Type DELETE to confirm" autocomplete="off" id="deleteConfirmInput" style="margin-bottom: 16px;">
                 <div class="modal-actions">
                     <button type="button" class="modal-btn cancel" onclick="closeDeleteModal()">Cancel</button>
                     <button type="submit" class="modal-btn danger" id="deleteSubmitBtn" disabled>Delete Forever</button>
@@ -319,17 +505,22 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <?php endif; ?>
 
                 <!-- Toolbar -->
-                <div class="toolbar">
-                    <div class="search-box">
-                        <i class="fa-solid fa-magnifying-glass"></i>
-                        <input type="text" id="searchInput" placeholder="Search by name or email..." oninput="filterUsers()">
+                <div class="toolbar" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1;">
+                        <div class="search-box">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="searchInput" placeholder="Search by name or email..." oninput="filterUsers()">
+                        </div>
+                        <div class="filter-pills">
+                            <span class="filter-pill active" data-filter="all" onclick="setFilter('all', this)">All <span class="pill-count"><?php echo $totalUsers; ?></span></span>
+                            <span class="filter-pill" data-filter="seller" onclick="setFilter('seller', this)">Sellers <span class="pill-count"><?php echo $totalSellers; ?></span></span>
+                            <span class="filter-pill" data-filter="admin" onclick="setFilter('admin', this)">Admins <span class="pill-count"><?php echo $totalAdmins; ?></span></span>
+                            <span class="filter-pill" data-filter="suspended" onclick="setFilter('suspended', this)">Suspended <span class="pill-count"><?php echo $totalSuspended; ?></span></span>
+                        </div>
                     </div>
-                    <div class="filter-pills">
-                        <span class="filter-pill active" data-filter="all" onclick="setFilter('all', this)">All <span class="pill-count"><?php echo $totalUsers; ?></span></span>
-                        <span class="filter-pill" data-filter="seller" onclick="setFilter('seller', this)">Sellers <span class="pill-count"><?php echo $totalSellers; ?></span></span>
-                        <span class="filter-pill" data-filter="admin" onclick="setFilter('admin', this)">Admins <span class="pill-count"><?php echo $totalAdmins; ?></span></span>
-                        <span class="filter-pill" data-filter="suspended" onclick="setFilter('suspended', this)">Suspended <span class="pill-count"><?php echo $totalSuspended; ?></span></span>
-                    </div>
+                    <button type="button" class="modal-btn primary" onclick="openAddUserModal()" style="display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        <i class="fa-solid fa-user-plus"></i> Add New User
+                    </button>
                 </div>
 
                 <div style="overflow-x: auto;">
@@ -374,10 +565,10 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                             <div style="font-size: 11px; color: var(--text-light);">
                                                 ID #<?php echo $u['id']; ?>
                                                 <?php if($u['auth_provider'] === 'google'): ?>
-                                                    &middot; <i class="fa-brands fa-google" style="color: #ea4335;"></i>
+                                                     <i class="fa-brands fa-google" style="color: #ea4335;"></i>
                                                 <?php endif; ?>
                                                 <?php if($u['is_2fa_enabled']): ?>
-                                                    &middot; <i class="fa-solid fa-shield-halved" style="color: #10b981;" title="2FA Enabled"></i>
+                                                     <i class="fa-solid fa-shield-halved" style="color: #10b981;" title="2FA Enabled"></i>
                                                 <?php endif; ?>
                                             </div>
                                         </div>
@@ -404,6 +595,18 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                                 <i class="fa-solid fa-eye"></i> View
                                             </button>
 
+                                            <!-- Edit User Modal Button -->
+                                            <button type="button" class="action-btn" style="background: #eff6ff; color: #2563eb;" onclick='openEditUserModal(<?php echo htmlspecialchars(json_encode([
+                                                "id" => $u["id"],
+                                                "firstname" => $u["firstname"] ?? "",
+                                                "lastname" => $u["lastname"] ?? "",
+                                                "email" => $u["email"] ?? "",
+                                                "usertype" => $u["usertype"] ?? "user",
+                                                "status" => $u["status"] ?? "active"
+                                            ]), ENT_QUOTES, "UTF-8"); ?>)'>
+                                                <i class="fa-solid fa-pen-to-square"></i> Edit
+                                            </button>
+
                                             <!-- Suspend / Reactivate -->
                                             <?php if($userStatus === 'active'): ?>
                                                 <form method="POST" style="display:inline;" onsubmit="return confirm('Suspend this user? They will not be able to log in.');">
@@ -420,9 +623,22 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                             <?php endif; ?>
                                         </div>
                                     <?php else: ?>
-                                        <span style="font-size: 12px; color: var(--text-light); font-style: italic;">
-                                            <i class="fa-solid fa-user-check" style="margin-right: 4px;"></i>It's you
-                                        </span>
+                                        <div style="display: flex; gap: 6px; align-items: center;">
+                                            <!-- Edit Self Button -->
+                                            <button type="button" class="action-btn" style="background: #eff6ff; color: #2563eb;" onclick='openEditUserModal(<?php echo htmlspecialchars(json_encode([
+                                                "id" => $u["id"],
+                                                "firstname" => $u["firstname"] ?? "",
+                                                "lastname" => $u["lastname"] ?? "",
+                                                "email" => $u["email"] ?? "",
+                                                "usertype" => $u["usertype"] ?? "user",
+                                                "status" => $u["status"] ?? "active"
+                                            ]), ENT_QUOTES, "UTF-8"); ?>)'>
+                                                <i class="fa-solid fa-pen-to-square"></i> Edit
+                                            </button>
+                                            <span style="font-size: 12px; color: var(--text-light); font-style: italic;">
+                                                <i class="fa-solid fa-user-check" style="margin-right: 4px;"></i>You
+                                            </span>
+                                        </div>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -553,6 +769,28 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             document.getElementById('deleteModal').classList.remove('show');
         }
 
+        function openAddUserModal() {
+            document.getElementById('addUserModal').classList.add('show');
+        }
+
+        function closeAddUserModal() {
+            document.getElementById('addUserModal').classList.remove('show');
+        }
+
+        function openEditUserModal(user) {
+            document.getElementById('editUserId').value = user.id;
+            document.getElementById('editFirstName').value = user.firstname || '';
+            document.getElementById('editLastName').value = user.lastname || '';
+            document.getElementById('editEmail').value = user.email || '';
+            document.getElementById('editUserType').value = user.usertype || 'user';
+            document.getElementById('editStatus').value = user.status || 'active';
+            document.getElementById('editUserModal').classList.add('show');
+        }
+
+        function closeEditUserModal() {
+            document.getElementById('editUserModal').classList.remove('show');
+        }
+
         // Enable delete button only when "DELETE" is typed
         document.getElementById('deleteConfirmInput').addEventListener('input', function() {
             document.getElementById('deleteSubmitBtn').disabled = (this.value.toUpperCase() !== 'DELETE');
@@ -561,6 +799,12 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         // Close modal on overlay click
         document.getElementById('deleteModal').addEventListener('click', function(e) {
             if (e.target === this) closeDeleteModal();
+        });
+        document.getElementById('addUserModal').addEventListener('click', function(e) {
+            if (e.target === this) closeAddUserModal();
+        });
+        document.getElementById('editUserModal').addEventListener('click', function(e) {
+            if (e.target === this) closeEditUserModal();
         });
     </script>
 </body>

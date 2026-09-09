@@ -11,11 +11,18 @@ if ($userType !== 'seller') {
     exit();
 }
 
+// First, get the seller's record ID
+$sellerStmt = $conn->prepare("SELECT id FROM sellers WHERE user_id = ? LIMIT 1");
+$sellerStmt->bind_param("i", $userId);
+$sellerStmt->execute();
+$sellerData = $sellerStmt->get_result()->fetch_assoc();
+$sellerDbId = $sellerData ? (int)$sellerData['id'] : $userId;
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     if ($action === 'contact_renter' && isset($_POST['rental_id'])) {
-        $rentalId = $_POST['rental_id'];
+        $rentalId = (int)$_POST['rental_id'];
         
         // Fetch rental details
         $stmt = $conn->prepare("
@@ -28,9 +35,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             FROM book_rentals br
             JOIN books b ON br.book_id = b.book_id
             JOIN users u ON br.user_id = u.id
-            WHERE br.rental_id = ? AND br.seller_id = ?
+            WHERE br.rental_id = ? AND (br.seller_id = ? OR br.seller_id = ?)
         ");
-        $stmt->bind_param("ii", $rentalId, $userId);
+        $stmt->bind_param("iii", $rentalId, $sellerDbId, $userId);
         $stmt->execute();
         $result = $stmt->get_result();
         $rentalDetails = $result->fetch_assoc();
@@ -73,14 +80,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 return_date = NOW(), 
                 book_condition = ?, 
                 return_notes = ?
-            WHERE rental_id = ? AND seller_id = ?
+            WHERE rental_id = ? AND (seller_id = ? OR seller_id = ?)
         ");
-        $updateStmt->bind_param("ssii", $bookCondition, $returnNotes, $rentalId, $userId);
+        $updateStmt->bind_param("ssiii", $bookCondition, $returnNotes, $rentalId, $sellerDbId, $userId);
         
         if ($updateStmt->execute()) {
-            // Fetch book details to update stock
+            // Fetch book details to update stock and order status
             $bookStmt = $conn->prepare("
-                SELECT book_id, rental_weeks 
+                SELECT book_id, rental_weeks, order_id 
                 FROM book_rentals 
                 WHERE rental_id = ?
             ");
@@ -89,14 +96,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $bookResult = $bookStmt->get_result();
             $bookData = $bookResult->fetch_assoc();
             
-            // Update book availability
-            $updateBookStmt = $conn->prepare("
-                UPDATE books 
-                SET stock = stock + 1 
-                WHERE book_id = ?
-            ");
-            $updateBookStmt->bind_param("i", $bookData['book_id']);
-            $updateBookStmt->execute();
+            if ($bookData) {
+                // Update book availability
+                $updateBookStmt = $conn->prepare("
+                    UPDATE books 
+                    SET stock = stock + 1 
+                    WHERE book_id = ?
+                ");
+                $updateBookStmt->bind_param("i", $bookData['book_id']);
+                $updateBookStmt->execute();
+
+                // Also update order_items status to returned if order_id is linked
+                if (!empty($bookData['order_id'])) {
+                    $updItem = $conn->prepare("UPDATE order_items SET status = 'returned' WHERE order_id = ? AND book_id = ?");
+                    $updItem->bind_param("ii", $bookData['order_id'], $bookData['book_id']);
+                    $updItem->execute();
+                }
+            }
             
             // Log the return
             $logStmt = $conn->prepare("

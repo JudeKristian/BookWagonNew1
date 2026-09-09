@@ -212,6 +212,10 @@ while ($book = $result->fetch_assoc()) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Book Collections - BookWagon</title>
     <!-- Bootstrap CSS -->
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -225,9 +229,9 @@ while ($book = $result->fetch_assoc()) {
             --border-color: #dee2e6;
         }
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: #f8fafc;
         }
         .navbar {
             padding: 15px 0;
@@ -381,32 +385,12 @@ while ($book = $result->fetch_assoc()) {
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-                    <a href="collections.php" class="sidebar-link active">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-                    <a href="history.php" class="sidebar-link">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
             
             <!-- Main Content Column -->
-            <div class="col-md-9">
+            <div class="col-lg-9 col-md-8">
                 <!-- Success/Error Messages -->
                 <?php if (isset($_SESSION['success_message'])): ?>
                     <div class="alert alert-success alert-dismissible fade show" role="alert">

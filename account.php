@@ -123,6 +123,10 @@ $tax_id = $user['tax_id'] ?? '';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Account - BookWagon</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
@@ -131,15 +135,20 @@ $tax_id = $user['tax_id'] ?? '';
     <style>
         :root {
             --primary-color: #f8a100;
-            --secondary-color: #f8f9fa;
-            --text-dark: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
+            --primary-dark: #d97706;
+            --primary-light: #fffbeb;
+            --primary-border: #fef3c7;
+            --text-dark: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --bg-body: #f8fafc;
+            --card-bg: #ffffff;
+            --border-color: #edf2f7;
         }
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: var(--bg-body);
         }
 
         .dropdown-item {
@@ -155,25 +164,27 @@ $tax_id = $user['tax_id'] ?? '';
             background-color: rgba(0,0,0,0.1);
         }
 
-        /* Fix dropdown toggle arrow */
-        .dropdown-toggle::after {
-            margin-left: 0.5em;
-        }
-        /* Header styles */
         .navbar {
             padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid #e2e8f0;
+            background-color: #ffffff;
         }
         
         .navbar-brand img {
             height: 60px;
         }
         .profile-card {
-            background-color: #fff;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.05);
-            padding: 20px;
-            margin-bottom: 30px;
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.02);
+            padding: 24px 28px;
+            margin-bottom: 24px;
+            transition: box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+        .profile-card:hover {
+            box-shadow: 0 8px 30px rgba(0,0,0,0.04);
+            border-color: #e2e8f0;
         }
         .profile-header {
             display: flex;
@@ -182,28 +193,45 @@ $tax_id = $user['tax_id'] ?? '';
             margin-bottom: 20px;
         }
         .profile-picture {
-            width: 80px;
-            height: 80px;
+            width: 84px;
+            height: 84px;
             border-radius: 50%;
             object-fit: cover;
+            border: 3px solid #ffffff;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
             margin-right: 20px;
         }
         .profile-picture-container {
             position: relative;
+            display: inline-block;
         }
         .edit-picture {
             position: absolute;
             bottom: 0;
-            right: 15px;
-            background: #fff;
+            right: 12px;
+            background: #ffffff;
             border-radius: 50%;
             width: 30px;
             height: 30px;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 0 5px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
             cursor: pointer;
+            border: 2px solid #ffffff;
+            transition: all 0.2s ease;
+        }
+        .edit-picture:hover {
+            background: var(--primary-color);
+            transform: scale(1.1);
+        }
+        .edit-picture i {
+            font-size: 13px;
+            color: #64748b;
+            transition: color 0.2s ease;
+        }
+        .edit-picture:hover i {
+            color: #ffffff;
         }
         .user-info {
             flex-grow: 1;
@@ -213,55 +241,64 @@ $tax_id = $user['tax_id'] ?? '';
             justify-content: space-between;
             align-items: center;
             margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .section-title h3 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0;
+            letter-spacing: -0.01em;
         }
         .edit-button {
-            color: #6c757d;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #64748b;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 6px 14px;
+            border-radius: 8px;
             cursor: pointer;
-            background: none;
-            border: none;
-            padding: 0;
+            transition: all 0.2s ease;
+        }
+        .edit-button:hover {
+            background: var(--primary-light);
+            color: var(--primary-dark);
+            border-color: var(--primary-border);
         }
         .info-row {
-            margin-bottom: 20px;
+            margin-bottom: 18px;
         }
         .info-label {
-            color: #6c757d;
-            font-size: 0.9rem;
-            margin-bottom: 5px;
+            color: #94a3b8;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin-bottom: 4px;
         }
         .info-value {
-            color: #343a40;
+            color: #1e293b;
+            font-size: 0.96rem;
+            font-weight: 600;
         }
-        
-        /* Sidebar Styles */
-        .sidebar {
-            background-color: #f8f9fa;
-            border-radius: 10px;
-            padding: 20px 0;
-            min-height: calc(100vh - 150px);
-            position: sticky;
-            top: 20px;
+        .btn-primary {
+            background-color: var(--primary-color) !important;
+            border-color: var(--primary-color) !important;
+            color: #ffffff !important;
+            font-weight: 600;
         }
-        
-        .sidebar-link {
-            display: block;
-            padding: 12px 20px;
-            color: var(--text-muted);
-            text-decoration: none;
-            transition: all 0.3s;
-            border-left: 3px solid transparent;
+        .btn-primary:hover {
+            background-color: var(--primary-dark) !important;
+            border-color: var(--primary-dark) !important;
         }
-        
-        .sidebar-link:hover, .sidebar-link.active {
-            background-color: rgba(0, 123, 255, 0.05);
-            color: #4a6cf7;
-            border-left: 3px solid #4a6cf7;
-        }
-        
-        .sidebar-link i {
-            width: 20px;
-            text-align: center;
-            margin-right: 10px;
+        .form-control:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.2rem rgba(248, 161, 0, 0.2);
         }
     </style>
 </head>
@@ -272,32 +309,12 @@ $tax_id = $user['tax_id'] ?? '';
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link active">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-                    <a href="collections.php" class="sidebar-link">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-                    <a href="history.php" class="sidebar-link">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
             
             <!-- Main Content Column -->
-            <div class="col-md-9">
+            <div class="col-lg-9 col-md-8">
                 <!-- Success/Error Messages -->
                 <?php if (isset($_SESSION['success_message'])): ?>
                     <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -321,27 +338,31 @@ $tax_id = $user['tax_id'] ?? '';
 
                 <!-- Profile Header Card -->
                 <div class="profile-card">
-                    <div class="d-flex">
-                        <div class="profile-picture-container">
-                            <?php if(!empty($user['profile_picture']) && file_exists($user['profile_picture'])): ?>
-                                <img src="<?php echo htmlspecialchars($user['profile_picture']); ?>" alt="Profile Picture" class="profile-picture" style="width: 80px; height: 80px; object-fit: cover; border-radius: 50%;">
-                            <?php else: ?>
-                                <div class="rounded-circle d-flex align-items-center justify-content-center bg-primary text-white fw-bold shadow-sm" style="width: 80px; height: 80px; font-size: 32px;">
-                                    <?php echo strtoupper(substr($user['firstname'] ?? 'U', 0, 1)); ?>
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                        <div class="d-flex align-items-center">
+                            <div class="profile-picture-container">
+                                <?php if(!empty($user['profile_picture']) && file_exists($user['profile_picture'])): ?>
+                                    <img src="<?php echo htmlspecialchars($user['profile_picture']); ?>" alt="Profile Picture" class="profile-picture">
+                                <?php else: ?>
+                                    <div class="rounded-circle d-flex align-items-center justify-content-center text-white fw-bold shadow-sm" style="width: 84px; height: 84px; font-size: 32px; background: linear-gradient(135deg, #f8a100, #ea580c); border: 3px solid #ffffff; box-shadow: 0 4px 14px rgba(248, 161, 0, 0.25);">
+                                        <?php echo strtoupper(substr($user['firstname'] ?? 'U', 0, 1)); ?>
+                                    </div>
+                                <?php endif; ?>
+                                <div class="edit-picture" data-bs-toggle="modal" data-bs-target="#uploadPictureModal" title="Change photo">
+                                    <i class="fa-solid fa-camera"></i>
                                 </div>
-                            <?php endif; ?>
-                            <div class="edit-picture" data-bs-toggle="modal" data-bs-target="#uploadPictureModal">
-                                <i class="fas fa-camera"></i>
                             </div>
-                        </div>
-                        <div class="user-info ms-3">
-                            <h2 class="mb-1"><?php echo $user['firstname'] . ' ' . $user['lastname']; ?></h2>
-                            <p class="text-muted mb-1"><?php echo $bio ? $bio : 'BookWagon User'; ?></p>
-                            <p class="text-muted mb-0"><?php echo $city_state ? $city_state . ', ' . $country : ''; ?></p>
+                            <div class="user-info ms-3">
+                                <h2 class="mb-1" style="font-size: 1.45rem; font-weight: 700; color: #0f172a;"><?php echo htmlspecialchars($user['firstname'] . ' ' . $user['lastname']); ?></h2>
+                                <p class="text-muted mb-1" style="font-size: 0.88rem;"><?php echo $bio ? htmlspecialchars($bio) : 'BookWagon Member'; ?></p>
+                                <?php if ($city_state || $country): ?>
+                                    <p class="text-muted mb-0" style="font-size: 0.82rem;"><i class="fa-solid fa-location-dot text-danger me-1"></i><?php echo htmlspecialchars(trim($city_state . ', ' . $country, ', ')); ?></p>
+                                <?php endif; ?>
+                            </div>
                         </div>
                         <div>
                             <button class="edit-button" data-bs-toggle="modal" data-bs-target="#editProfileModal">
-                                <i class="fas fa-pencil-alt"></i> Edit
+                                <i class="fa-solid fa-pen-to-square"></i> Edit
                             </button>
                         </div>
                     </div>
@@ -352,40 +373,40 @@ $tax_id = $user['tax_id'] ?? '';
                     <div class="section-title">
                         <h3>Personal Information</h3>
                         <button class="edit-button" data-bs-toggle="modal" data-bs-target="#editPersonalInfoModal">
-                            <i class="fas fa-pencil-alt"></i> Edit
+                            <i class="fa-solid fa-pen-to-square"></i> Edit
                         </button>
                     </div>
                     
                     <div class="row info-row">
                         <div class="col-md-6">
                             <div class="info-label">First Name</div>
-                            <div class="info-value"><?php echo $user['firstname']; ?></div>
+                            <div class="info-value"><?php echo htmlspecialchars($user['firstname']); ?></div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-label">Last Name</div>
-                            <div class="info-value"><?php echo $user['lastname']; ?></div>
+                            <div class="info-value"><?php echo htmlspecialchars($user['lastname']); ?></div>
                         </div>
                     </div>
                     
                     <div class="row info-row">
                         <div class="col-md-6">
                             <div class="info-label">Email address</div>
-                            <div class="info-value"><?php echo $user['email']; ?></div>
+                            <div class="info-value"><?php echo htmlspecialchars($user['email']); ?></div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-label">Phone</div>
-                            <div class="info-value"><?php echo $phone ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $phone ? htmlspecialchars($phone) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                     </div>
                     
-                    <div class="row info-row">
+                    <div class="row info-row mb-0">
                         <div class="col-md-6">
                             <div class="info-label">Username</div>
-                            <div class="info-value"><?php echo $user['username'] ?: 'Not set'; ?></div>
+                            <div class="info-value"><?php echo $user['username'] ? htmlspecialchars($user['username']) : '<span class="text-muted fst-italic">Not set</span>'; ?></div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-label">Bio</div>
-                            <div class="info-value"><?php echo $bio ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $bio ? htmlspecialchars($bio) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                     </div>
                 </div>
@@ -395,29 +416,29 @@ $tax_id = $user['tax_id'] ?? '';
                     <div class="section-title">
                         <h3>Address</h3>
                         <button class="edit-button" data-bs-toggle="modal" data-bs-target="#editAddressModal">
-                            <i class="fas fa-pencil-alt"></i> Edit
+                            <i class="fa-solid fa-pen-to-square"></i> Edit
                         </button>
                     </div>
                     
                     <div class="row info-row">
                         <div class="col-md-6">
                             <div class="info-label">Country</div>
-                            <div class="info-value"><?php echo $country ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $country ? htmlspecialchars($country) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-label">City/State</div>
-                            <div class="info-value"><?php echo $city_state ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $city_state ? htmlspecialchars($city_state) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                     </div>
                     
-                    <div class="row info-row">
+                    <div class="row info-row mb-0">
                         <div class="col-md-6">
                             <div class="info-label">Postal Code</div>
-                            <div class="info-value"><?php echo $postal_code ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $postal_code ? htmlspecialchars($postal_code) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                         <div class="col-md-6">
                             <div class="info-label">TAX ID</div>
-                            <div class="info-value"><?php echo $tax_id ?: 'Not provided'; ?></div>
+                            <div class="info-value"><?php echo $tax_id ? htmlspecialchars($tax_id) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
                         </div>
                     </div>
                 </div>
@@ -544,6 +565,9 @@ $tax_id = $user['tax_id'] ?? '';
             </div>
         </div>
     </div>
+
+    <!-- Global BookWagon Footer -->
+    <?php include("include/footer.php"); ?>
 
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>

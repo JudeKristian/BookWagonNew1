@@ -125,9 +125,6 @@ if (isset($_POST['update_item']) && isset($_POST['cart_id'])) {
             $updateStmt->bind_param("isiii", $quantity, $purchaseType, $rentalWeeks, $cartId, $userId);
             
             if ($updateStmt->execute()) {
-                $_SESSION['cart_message'] = "Cart updated successfully.";
-                $_SESSION['cart_message_type'] = "success";
-                
                 // Debug logging of success
                 error_log("Successfully updated cart: cart_id=$cartId, rental_weeks=$rentalWeeks");
             } else {
@@ -223,19 +220,19 @@ $_SESSION['cart_details'] = [
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <style>
+        <style>
         :root {
             --primary-color: #f8a100;
-            --secondary-color: #f8f9fa;
-            --text-dark: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
+            --primary-dark: #d97706;
+            --text-dark: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e9ecef;
         }
         
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: #f8fafc;
         }
 
         .dropdown-item {
@@ -251,12 +248,10 @@ $_SESSION['cart_details'] = [
             background-color: rgba(0,0,0,0.1);
         }
 
-        /* Fix dropdown toggle arrow */
         .dropdown-toggle::after {
             margin-left: 0.5em;
         }
         
-        /* Header styles */
         .navbar {
             padding: 15px 0;
             border-bottom: 1px solid var(--border-color);
@@ -265,733 +260,271 @@ $_SESSION['cart_details'] = [
         .navbar-brand img {
             height: 60px;
         }
-        
-        /* Cart styles */
+
+        /* Cart Container & Item Cards */
         .cart-container {
-            margin: 30px 0;
+            margin-bottom: 24px;
         }
         
         .cart-item {
-            padding: 20px 0;
-            border-bottom: 1px solid var(--border-color);
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px 18px;
+            margin-bottom: 12px;
+        }
+        
+        .cart-item-image-wrapper {
+            width: 75px;
+            height: 105px;
+            flex-shrink: 0;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #f1f5f9;
+            border: 1px solid #edf2f7;
         }
         
         .cart-item-image {
-            width: 100px;
-            height: 130px;
+            width: 100%;
+            height: 100%;
             object-fit: cover;
-        }
-        
-        .cart-item-details {
-            padding-left: 20px;
+            display: block;
         }
         
         .cart-item-title {
             font-weight: 600;
-            margin-bottom: 5px;
+            font-size: 0.98rem;
+            color: var(--text-dark);
+            margin-bottom: 3px;
+            line-height: 1.35;
         }
         
         .cart-item-attr {
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             color: var(--text-muted);
-            margin-bottom: 3px;
+            margin-bottom: 6px;
+        }
+        
+        .cart-item-price {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: var(--text-dark);
+        }
+
+        .cart-item-price-sub {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* Simple Segmented Toggle */
+        .purchase-type-toggle {
+            display: inline-flex;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #f8fafc;
+        }
+        
+        .purchase-option {
+            padding: 5px 14px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #64748b;
+            cursor: pointer;
+            transition: background-color 0.15s, color 0.15s;
+            user-select: none;
+            white-space: nowrap;
+        }
+        
+        .purchase-option:hover {
+            color: var(--text-dark);
+        }
+        
+        .purchase-option.active {
+            background: #f8a100;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        
+        .rent-duration {
+            margin-top: 6px;
+            display: none;
+        }
+        
+        .rent-duration.active {
+            display: inline-block;
+        }
+        
+        .rent-duration select {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 0.8rem;
+            color: var(--text-dark);
+            background-color: #ffffff;
         }
         
         .quantity-selector {
-            width: 100px;
-        }
-        
-        .cart-actions {
-            margin-top: 10px;
-            display: flex;
-            gap: 15px;
-            font-size: 0.9rem;
-        }
-        
-        .cart-action {
+            width: 70px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
             color: var(--text-dark);
-            text-decoration: none;
-            cursor: pointer;
+            background-color: #ffffff;
         }
-        
-        .cart-action:hover {
-            color: var(--primary-color);
-        }
-        
+
+        /* Order Summary Card */
         .cart-summary {
-            background-color: var(--secondary-color);
+            background: #ffffff;
+            border: 1px solid var(--border-color);
             border-radius: 10px;
             padding: 20px;
+            position: sticky;
+            top: 24px;
+        }
+        
+        .cart-summary h5 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-dark);
+            margin-bottom: 16px;
         }
         
         .cart-summary-row {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 10px;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 0.88rem;
+            color: #475569;
         }
         
-        .free-shipping-message {
-            background-color: #e9f7ef;
-            border-radius: 10px;
-            padding: 10px 15px;
-            margin: 15px 0;
-            display: flex;
-            align-items: center;
-        }
-        
-        .free-shipping-bubble {
-            background-color: #f8d85a;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-left: 10px;
+        .cart-summary-row.total-row {
+            border-top: 1px solid var(--border-color);
+            margin-top: 6px;
+            padding-top: 12px;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-dark);
         }
         
         .checkout-button {
-            background-color: #000;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 10px;
+            display: block;
+            text-align: center;
             width: 100%;
+            background: #f8a100;
+            color: #ffffff !important;
             font-weight: 600;
-            margin-top: 15px;
+            font-size: 0.92rem;
+            padding: 11px 16px;
+            border-radius: 8px;
+            border: none;
+            text-decoration: none;
+            margin-top: 16px;
+            transition: background-color 0.15s ease;
         }
         
         .checkout-button:hover {
-            background-color: #333;
+            background: #d97706;
+            color: #ffffff;
         }
         
-        .promo-code-form {
-            display: flex;
-            margin-bottom: 20px;
+        .checkout-button.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+            cursor: not-allowed;
         }
-        
-        .promo-code-input {
-            flex-grow: 1;
+
+        /* Empty Cart State */
+        .empty-cart-container {
+            background: #ffffff;
             border: 1px solid var(--border-color);
-            border-radius: 5px 0 0 5px;
-            padding: 8px 15px;
-        }
-        
-        .promo-code-button {
-            background-color: #000;
-            color: white;
-            border: none;
-            border-radius: 0 5px 5px 0;
-            padding: 8px 15px;
-        }
-        
-        /* Purchase type toggle */
-        .purchase-type-container {
-            margin-top: 10px;
-        }
-        
-        .purchase-type-label {
-            font-size: 0.9rem;
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        
-        .purchase-type-toggle {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .purchase-option {
-            flex: 1;
-            text-align: center;
-            padding: 8px;
-            border: 1px solid var(--border-color);
-            border-radius: 5px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .purchase-option.active {
-            background-color: #e9f7ef;
-            border-color: #28a745;
-            color: #28a745;
-        }
-        
-        .rent-duration {
-            margin-top: 10px;
-            display: none;
-        }
-        
-        .rent-duration.active {
-            display: block;
-        }
-        
-        /* Sidebar Styles */
-        .sidebar {
-            background-color: #f8f9fa;
             border-radius: 10px;
-            padding: 20px 0;
-            min-height: calc(100vh - 150px);
-            position: sticky;
-            top: 20px;
-        }
-        
-        .sidebar-link {
-            display: block;
-            padding: 12px 20px;
-            color: var(--text-muted);
-            text-decoration: none;
-            transition: all 0.3s;
-            border-left: 3px solid transparent;
-        }
-        
-        .sidebar-link:hover, .sidebar-link.active {
-            background-color: rgba(0, 123, 255, 0.05);
-            color: #4a6cf7;
-            border-left: 3px solid #4a6cf7;
-        }
-        
-        .sidebar-link i {
-            width: 20px;
+            padding: 48px 20px;
             text-align: center;
-            margin-right: 10px;
         }
-        /* Empty cart styles */
-.empty-cart-container {
-    padding: 80px 0;
-    text-align: center;
-    max-width: 500px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 50vh; /* Ensure it takes up at least half the viewport height */
-}
-
-.empty-cart-image {
-    max-width: 180px;
-    margin-bottom: 30px;
-    animation: float 6s ease-in-out infinite;
-}
-
-@keyframes float {
-    0% {
-        transform: translateY(0px);
-    }
-    50% {
-        transform: translateY(-10px);
-    }
-    100% {
-        transform: translateY(0px);
-    }
-}
-
-.empty-cart-title {
-    font-size: 24px;
-    font-weight: 600;
-    margin-bottom: 15px;
-    color: #333;
-}
-
-.empty-cart-message {
-    color: #6c757d;
-    font-size: 16px;
-    margin-bottom: 30px;
-    line-height: 1.5;
-}
-
-.continue-shopping-btn {
-    background-color: var(--primary-color);
-    color: white;
-    border: none;
-    padding: 12px 30px;
-    border-radius: 5px;
-    font-weight: 500;
-    text-decoration: none;
-    display: inline-block;
-    transition: all 0.3s;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-.continue-shopping-btn:hover {
-    background-color: #e69400;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
-    color: white;
-    text-decoration: none;
-}
-
-.continue-shopping-btn:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-/* Responsive adjustments */
-@media (max-width: 1200px) {
-    .container {
-        max-width: 100%;
-        padding-left: 20px;
-        padding-right: 20px;
-    }
-
-    .cart-item {
-        padding: 20px;
-    }
-
-    .cart-summary {
-        padding: 20px;
-    }
-}
-
-@media (max-width: 992px) {
-    .row {
-        --bs-gutter-x: 15px;
-    }
-
-    .sidebar {
-        margin-bottom: 30px;
-    }
-
-    .cart-container {
-        margin-bottom: 20px;
-    }
-
-    .cart-item {
-        padding: 15px;
-    }
-
-    .cart-item-image {
-        width: 80px;
-        height: 120px;
-        object-fit: cover;
-    }
-
-    .cart-item-title {
-        font-size: 1.1rem;
-    }
-
-    .purchase-type-toggle {
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .purchase-option {
-        padding: 6px 12px;
-        font-size: 0.9rem;
-    }
-
-    .cart-summary {
-        margin-top: 0;
-    }
-}
-
-@media (max-width: 768px) {
-    .container {
-        padding-left: 15px;
-        padding-right: 15px;
-    }
-
-    .py-5 {
-        padding-top: 2rem !important;
-        padding-bottom: 2rem !important;
-    }
-
-    .sidebar {
-        padding: 15px 0;
-    }
-
-    .sidebar h4 {
-        font-size: 1.25rem;
-        margin-bottom: 1rem;
-    }
-
-    .sidebar-link {
-        padding: 10px 15px;
-        font-size: 0.95rem;
-    }
-
-    h2 {
-        font-size: 1.75rem;
-        margin-bottom: 1.5rem;
-    }
-
-    .cart-item {
-        padding: 15px;
-        margin-bottom: 15px;
-    }
-
-    .cart-item-image {
-        width: 70px;
-        height: 100px;
-        margin-bottom: 10px;
-    }
-
-    .cart-item-title {
-        font-size: 1rem;
-        margin-bottom: 8px;
-    }
-
-    .cart-item-attr {
-        font-size: 0.9rem;
-        margin-bottom: 5px;
-    }
-
-    .purchase-type-container {
-        margin-top: 15px;
-    }
-
-    .purchase-type-label {
-        font-size: 0.9rem;
-        margin-bottom: 8px;
-    }
-
-    .purchase-type-toggle {
-        gap: 6px;
-    }
-
-    .purchase-option {
-        padding: 8px;
-        font-size: 0.85rem;
-    }
-
-    .form-select {
-        padding: 0.375rem 0.75rem;
-        font-size: 0.9rem;
-    }
-
-    .cart-actions {
-        margin-top: 10px;
-    }
-
-    .cart-action {
-        font-size: 0.9rem;
-        padding: 6px 12px;
-    }
-
-    .cart-summary {
-        padding: 20px;
-        margin-top: 20px;
-    }
-
-    .cart-summary h4 {
-        font-size: 1.25rem;
-        margin-bottom: 1.5rem;
-    }
-
-    .promo-code-form {
-        margin-bottom: 20px;
-    }
-
-    .promo-code-input {
-        padding: 10px;
-        font-size: 0.9rem;
-    }
-
-    .promo-code-button {
-        padding: 10px 15px;
-        font-size: 0.9rem;
-    }
-
-    .cart-summary-row {
-        padding: 8px 0;
-        font-size: 0.95rem;
-    }
-
-    .checkout-button {
-        padding: 12px;
-        font-size: 1rem;
-    }
-
-    .empty-cart-title {
-        font-size: 1.5rem;
-    }
-
-    .empty-cart-message {
-        font-size: 0.95rem;
-    }
-
-    .continue-shopping-btn {
-        padding: 10px 25px;
-        font-size: 0.95rem;
-    }
-
-    .cart-summary-mobile {
-        display: block !important;
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 8px;
-        margin-top: 20px;
-    }
-
-    .cart-summary-mobile .cart-summary-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 0;
-        border-bottom: 1px solid #dee2e6;
-    }
-
-    .cart-summary-mobile .cart-summary-row:last-child {
-        border-bottom: none;
-    }
-}
-
-@media (max-width: 576px) {
-    .container {
-        padding-left: 10px;
-        padding-right: 10px;
-    }
-
-    .py-5 {
-        padding-top: 1.5rem !important;
-        padding-bottom: 1.5rem !important;
-    }
-
-    h2 {
-        font-size: 1.5rem;
-        text-align: center;
-    }
-
-    .sidebar {
-        padding: 12px 0;
-        border-radius: 6px;
-    }
-
-    .sidebar h4 {
-        font-size: 1.1rem;
-        padding: 0 15px;
-        margin-bottom: 0.75rem;
-    }
-
-    .sidebar-link {
-        padding: 8px 15px;
-        font-size: 0.9rem;
-    }
-
-    .sidebar-link i {
-        width: 18px;
-        margin-right: 8px;
-    }
-
-    .cart-item {
-        padding: 12px;
-        border-radius: 8px;
-    }
-
-    .cart-item-image {
-        width: 60px;
-        height: 90px;
-    }
-
-    .cart-item-title {
-        font-size: 0.95rem;
-        line-height: 1.3;
-    }
-
-    .cart-item-attr {
-        font-size: 0.85rem;
-    }
-
-    .purchase-type-container {
-        margin-top: 12px;
-    }
-
-    .purchase-type-toggle {
-        gap: 5px;
-    }
-
-    .purchase-option {
-        padding: 6px;
-        font-size: 0.8rem;
-        border-radius: 4px;
-    }
-
-    .rent-duration select {
-        font-size: 0.85rem;
-    }
-
-    .cart-actions {
-        margin-top: 8px;
-    }
-
-    .cart-action {
-        font-size: 0.85rem;
-        padding: 5px 10px;
-    }
-
-    .btn-sm {
-        padding: 0.25rem 0.5rem;
-        font-size: 0.8rem;
-    }
-
-    .cart-summary {
-        padding: 16px;
-        border-radius: 8px;
-    }
-
-    .cart-summary h4 {
-        font-size: 1.1rem;
-        margin-bottom: 1.25rem;
-    }
-
-    .promo-code-form {
-        margin-bottom: 16px;
-    }
-
-    .promo-code-input {
-        padding: 8px;
-        font-size: 0.85rem;
-    }
-
-    .promo-code-button {
-        padding: 8px 12px;
-        font-size: 0.85rem;
-    }
-
-    .cart-summary-row {
-        padding: 6px 0;
-        font-size: 0.9rem;
-    }
-
-    .checkout-button {
-        padding: 10px;
-        font-size: 0.95rem;
-    }
-
-    .free-shipping-message {
-        font-size: 0.85rem;
-    }
-
-    .empty-cart-container {
-        padding: 40px 0;
-        min-height: 40vh;
-    }
-
-    .empty-cart-image {
-        max-width: 120px;
-        margin-bottom: 20px;
-    }
-
-    .empty-cart-title {
-        font-size: 1.25rem;
-        margin-bottom: 12px;
-    }
-
-    .empty-cart-message {
-        font-size: 0.9rem;
-        margin-bottom: 20px;
-    }
-
-    .continue-shopping-btn {
-        padding: 8px 20px;
-        font-size: 0.9rem;
-    }
-
-    .cart-summary-mobile {
-        padding: 12px;
-        margin-top: 15px;
-    }
-
-    .cart-summary-mobile .cart-summary-row {
-        padding: 6px 0;
-        font-size: 0.9rem;
-    }
-}
-
-@media (max-width: 480px) {
-    .container {
-        padding-left: 8px;
-        padding-right: 8px;
-    }
-
-    .py-5 {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
-    }
-
-    .sidebar {
-        margin-bottom: 20px;
-    }
-
-    .cart-item {
-        padding: 10px;
-    }
-
-    .cart-item-image {
-        width: 50px;
-        height: 75px;
-    }
-
-    .purchase-type-toggle {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .purchase-option {
-        text-align: center;
-        padding: 8px 4px;
-        font-size: 0.75rem;
-    }
-
-    .cart-summary {
-        padding: 14px;
-    }
-
-    .cart-summary h4 {
-        font-size: 1rem;
-    }
-
-    .checkout-button {
-        padding: 8px;
-        font-size: 0.9rem;
-    }
-
-    .empty-cart-container {
-        padding: 30px 0;
-    }
-
-    .empty-cart-image {
-        max-width: 100px;
-        margin-bottom: 15px;
-    }
-}
-
-/* Loading Overlay */
-.loading-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(255, 255, 255, 0.7);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 9999;
-    visibility: hidden;
-    opacity: 0;
-    transition: visibility 0s, opacity 0.3s;
-}
-
-.loading-overlay.active {
-    visibility: visible;
-    opacity: 1;
-}
-
-.loading-spinner {
-    width: 50px;
-    height: 50px;
-    border: 5px solid var(--border-color);
-    border-top-color: var(--primary-color);
-    border-radius: 50%;
-    animation: spin 1s infinite linear;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
+        
+        .empty-cart-icon {
+            font-size: 2.5rem;
+            color: #cbd5e1;
+            margin-bottom: 12px;
+        }
+        
+        .empty-cart-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-dark);
+            margin-bottom: 6px;
+        }
+        
+        .empty-cart-message {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            max-width: 340px;
+            margin: 0 auto 20px auto;
+        }
+        
+        .continue-shopping-btn {
+            display: inline-block;
+            background: #f8a100;
+            color: #ffffff !important;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.88rem;
+            text-decoration: none;
+            transition: background-color 0.15s;
+        }
+        
+        .continue-shopping-btn:hover {
+            background: #d97706;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            visibility: hidden;
+            opacity: 0;
+            transition: visibility 0s, opacity 0.2s;
+        }
+        
+        .loading-overlay.active {
+            visibility: visible;
+            opacity: 1;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #e2e8f0;
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 0.8s infinite linear;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 991px) {
+            .cart-summary {
+                position: static;
+                margin-top: 20px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1006,224 +539,187 @@ $_SESSION['cart_details'] = [
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link active">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-
-                    <a href="collections.php" class="sidebar-link">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-                    <a href="history.php" class="sidebar-link">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
             
-            <!-- Main Content Column -->
-            <div class="col-md-9">
-                <h2 class="mb-4">Shopping Cart</h2>
-                
+                        <!-- Main Content Column -->
+            <div class="col-lg-9 col-md-8">
+                <div class="mb-4">
+                    <h4 class="fw-bold text-dark mb-1">Shopping Cart</h4>
+                    <p class="text-muted small mb-0">
+                        <?php echo count($cartItems); ?> <?php echo count($cartItems) === 1 ? 'item' : 'items'; ?> in your cart
+                    </p>
+                </div>
+
+                <?php if (isset($_SESSION['cart_message'])): ?>
+                <div class="alert alert-<?php echo $_SESSION['cart_message_type'] ?? 'info'; ?> alert-dismissible fade show mb-3 py-2 px-3 small" role="alert">
+                    <?php echo htmlspecialchars($_SESSION['cart_message']); ?>
+                    <button type="button" class="btn-close py-2 px-3" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+                <?php 
+                unset($_SESSION['cart_message']);
+                unset($_SESSION['cart_message_type']);
+                endif; 
+                ?>
 
                 <?php if (empty($cartItems)): ?>
                 <div class="empty-cart-container">
-                    <div>
-                        <svg width="180" height="180" viewBox="0 0 200 200" class="empty-cart-image">
-                            <!-- Background circle -->
-                            <circle cx="100" cy="100" r="80" fill="#f5f5f5" />
-                            
-                            <!-- Shopping cart -->
-                            <path d="M50 80 L65 130 L140 130 L155 80 Z" fill="none" stroke="#333" stroke-width="3" />
-                            <line x1="55" y1="90" x2="150" y2="90" stroke="#333" stroke-width="1.5" stroke-dasharray="4" />
-                            <line x1="65" y1="105" x2="140" y2="105" stroke="#333" stroke-width="1.5" stroke-dasharray="4" />
-                            <line x1="65" y1="120" x2="140" y2="120" stroke="#333" stroke-width="1.5" stroke-dasharray="4" />
-                            
-                            <!-- Cart handle -->
-                            <path d="M45 80 L45 65 L60 65" fill="none" stroke="#333" stroke-width="3" />
-                            
-                            <!-- Wheels -->
-                            <circle cx="75" cy="140" r="6" fill="#f84d4d" />
-                            <circle cx="105" cy="140" r="6" fill="#f84d4d" />
-                            <circle cx="135" cy="140" r="6" fill="#f84d4d" />
-                            
-                            <!-- Decorative confetti -->
-                            <path d="M40 50 Q45 45, 50 50" stroke="#f84d4d" stroke-width="2" fill="none" />
-                            <path d="M160 40 Q165 45, 160 50" stroke="#95d259" stroke-width="2" fill="none" />
-                            <path d="M170 85 Q175 80, 180 85" stroke="#f5a623" stroke-width="2" fill="none" />
-                            <path d="M30 100 Q25 105, 30 110" stroke="#50b7e0" stroke-width="2" fill="none" />
-                            
-                            <circle cx="45" cy="30" r="3" fill="#f84d4d" />
-                            <circle cx="165" cy="65" r="3" fill="#50b7e0" />
-                            <circle cx="25" cy="80" r="3" fill="#95d259" />
-                            <circle cx="155" cy="30" r="3" fill="#f5a623" />
-                        </svg>
+                    <div class="empty-cart-icon">
+                        <i class="fas fa-shopping-cart"></i>
                     </div>
-                    <h3 class="empty-cart-title">Your cart is empty</h3>
-                    <p class="empty-cart-message">Browse and find the best books fit in your mood.</p>
-                    <a href="rentbooks.php" class="continue-shopping-btn">Continue shopping</a>
+                    <h5 class="empty-cart-title">Your cart is empty</h5>
+                    <p class="empty-cart-message">Looks like you haven't added any books yet.</p>
+                    <a href="rentbooks.php" class="continue-shopping-btn">Browse Books</a>
                 </div>
                 <?php else: ?>
-                <div class="row">
-                    <!-- Cart Items -->
+                <div class="row g-3">
+                    <!-- Cart Items Column -->
                     <div class="col-lg-8">
                         <div class="cart-container">
                             <?php foreach ($cartItems as $item): ?>
                             <div class="cart-item">
-                                <div class="row">
-                                    <div class="col-md-3">
-                                        <img src="<?php echo $item['cover_image']; ?>" alt="<?php echo $item['title']; ?>" class="cart-item-image">
+                                <div class="d-flex gap-3">
+                                    <div class="cart-item-image-wrapper">
+                                        <img src="<?php echo htmlspecialchars($item['cover_image']); ?>" 
+                                             alt="<?php echo htmlspecialchars($item['title']); ?>" 
+                                             class="cart-item-image"
+                                             onerror="this.src='https://placehold.co/100x140?text=No+Cover'">
                                     </div>
-                                    <div class="col-md-9">
-                                        <div class="cart-item-details">
-                                            <h5 class="cart-item-title"><?php echo $item['title']; ?></h5>
-                                            <div class="cart-item-attr">Author: <?php echo $item['author']; ?></div>
-                                            
-                                <?php if ($item['purchase_type'] == 'rent'): ?>
-                                    <div>Rent Price: ₱<?php echo number_format($item['rent_price'] * $item['rental_weeks'], 2); ?> 
-                                        (for <?php echo $item['rental_weeks']; ?> week<?php echo $item['rental_weeks'] > 1 ? 's' : ''; ?>)
-                                    </div>
-                                <?php else: ?>
-                                    <div>Buy Price: ₱<?php echo number_format($item['price'], 2); ?></div>
-                                <?php endif; ?>
-
-                                            <form action="cart.php" method="post" class="mt-3">
-                                                <input type="hidden" name="cart_id" value="<?php echo $item['cart_id']; ?>">
-                                                
-                                                <div class="row align-items-center mb-3">
-                                                    <div class="col-sm-4">
-                                                        <label class="form-label">Quantity</label>
-                                                        <select name="quantity" class="form-select quantity-selector">
-                                                            <?php 
-                                                            // Get the book stock
-                                                            $stockStmt = $conn->prepare("SELECT stock FROM books WHERE book_id = ?");
-                                                            $stockStmt->bind_param("i", $item['book_id']);
-                                                            $stockStmt->execute();
-                                                            $stockResult = $stockStmt->get_result();
-                                                            $stockData = $stockResult->fetch_assoc();
-                                                            $maxStock = $stockData['stock'];
-                                                            
-                                                            // Set max to either 10 or the available stock, whichever is smaller
-                                                            $maxQuantity = min(10, $maxStock);
-                                                            
-                                                            for ($i = 1; $i <= $maxQuantity; $i++): 
-                                                            ?>
-                                                            <option value="<?php echo $i; ?>" <?php echo ($item['quantity'] == $i) ? 'selected' : ''; ?>>
-                                                                <?php echo $i; ?>
-                                                            </option>
-                                                            <?php endfor; ?>
-                                                        </select>
+                                    <div class="flex-grow-1 min-w-0">
+                                        <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                                            <div>
+                                                <h6 class="cart-item-title mb-1 text-truncate" style="max-width: 280px;" title="<?php echo htmlspecialchars($item['title']); ?>">
+                                                    <?php echo htmlspecialchars($item['title']); ?>
+                                                </h6>
+                                                <div class="cart-item-attr">
+                                                    by <?php echo htmlspecialchars($item['author']); ?>
+                                                </div>
+                                            </div>
+                                            <div class="text-end flex-shrink-0">
+                                                <?php if ($item['purchase_type'] == 'rent'): ?>
+                                                    <div class="cart-item-price">
+                                                        ₱<?php echo number_format($item['rent_price'] * $item['rental_weeks'], 2); ?>
                                                     </div>
-                                                    <div class="col-sm-8">
-                                                        <div class="purchase-type-container">
-                                                            <div class="purchase-type-label">Purchase Type</div>
-                                                            <div class="purchase-type-toggle">
-                                                                <div class="purchase-option <?php echo ($item['purchase_type'] == 'buy') ? 'active' : ''; ?>" 
-                                                                     data-type="buy" data-cart-id="<?php echo $item['cart_id']; ?>">
-                                                                    Buy (₱<?php echo number_format($item['price'], 2); ?>)
-                                                                </div>
-                                                                <div class="purchase-option <?php echo ($item['purchase_type'] == 'rent') ? 'active' : ''; ?>" 
-                                                                     data-type="rent" data-cart-id="<?php echo $item['cart_id']; ?>">
-                                                                    Rent (₱<?php echo number_format($item['rent_price'], 2); ?>/week)
-                                                                </div>
-                                                            </div>
-                                                            <input type="hidden" name="purchase_type" id="purchase_type_<?php echo $item['cart_id']; ?>" 
-                                                                   value="<?php echo $item['purchase_type']; ?>">
-                                                            
-                                                            <div class="rent-duration <?php echo ($item['purchase_type'] == 'rent') ? 'active' : ''; ?>" 
-                                                                 id="rent_duration_<?php echo $item['cart_id']; ?>">
-                                                                <label class="form-label mt-2">Rental Duration (weeks)</label>
-                                                                <select name="rental_weeks" class="form-select">
-                                                                    <?php for ($i = 1; $i <= 16; $i++): ?>
-                                                                    <option value="<?php echo $i; ?>" <?php echo ($item['rental_weeks'] == $i) ? 'selected' : ''; ?>>
-                                                                        <?php echo $i; ?> week<?php echo ($i > 1) ? 's' : ''; ?>
-                                                                    </option>
-                                                                    <?php endfor; ?>
-                                                                </select>
-                                                            </div>
+                                                    <div class="cart-item-price-sub">
+                                                        ₱<?php echo number_format($item['rent_price'], 2); ?>/wk × <?php echo $item['rental_weeks']; ?>w
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div class="cart-item-price">
+                                                        ₱<?php echo number_format($item['price'], 2); ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+
+                                        <form action="cart.php" method="post" class="mt-2">
+                                            <input type="hidden" name="cart_id" value="<?php echo $item['cart_id']; ?>">
+                                            
+                                            <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                                                <!-- Quantity -->
+                                                <div class="d-flex align-items-center gap-1">
+                                                    <label class="small text-muted mb-0">Qty:</label>
+                                                    <select name="quantity" class="form-select form-select-sm quantity-selector">
+                                                        <?php 
+                                                        $stockStmt = $conn->prepare("SELECT stock FROM books WHERE book_id = ?");
+                                                        $stockStmt->bind_param("i", $item['book_id']);
+                                                        $stockStmt->execute();
+                                                        $stockResult = $stockStmt->get_result();
+                                                        $stockData = $stockResult->fetch_assoc();
+                                                        $maxStock = $stockData['stock'] ?? 10;
+                                                        $maxQuantity = min(10, $maxStock);
+                                                        
+                                                        for ($i = 1; $i <= $maxQuantity; $i++): 
+                                                        ?>
+                                                        <option value="<?php echo $i; ?>" <?php echo ($item['quantity'] == $i) ? 'selected' : ''; ?>>
+                                                            <?php echo $i; ?>
+                                                        </option>
+                                                        <?php endfor; ?>
+                                                    </select>
+                                                </div>
+
+                                                <!-- Option Toggle -->
+                                                <div class="d-flex align-items-center gap-1">
+                                                    <div class="purchase-type-toggle">
+                                                        <div class="purchase-option <?php echo ($item['purchase_type'] == 'buy') ? 'active' : ''; ?>" 
+                                                             data-type="buy" data-cart-id="<?php echo $item['cart_id']; ?>">
+                                                            Buy
+                                                        </div>
+                                                        <div class="purchase-option <?php echo ($item['purchase_type'] == 'rent') ? 'active' : ''; ?>" 
+                                                             data-type="rent" data-cart-id="<?php echo $item['cart_id']; ?>">
+                                                            Rent
                                                         </div>
                                                     </div>
+                                                    <input type="hidden" name="purchase_type" id="purchase_type_<?php echo $item['cart_id']; ?>" 
+                                                           value="<?php echo $item['purchase_type']; ?>">
                                                 </div>
+
+                                                <!-- Duration (if Rent) -->
+                                                <div class="rent-duration <?php echo ($item['purchase_type'] == 'rent') ? 'active' : ''; ?>" 
+                                                     id="rent_duration_<?php echo $item['cart_id']; ?>">
+                                                    <select name="rental_weeks" class="form-select form-select-sm">
+                                                        <?php for ($i = 1; $i <= 16; $i++): ?>
+                                                        <option value="<?php echo $i; ?>" <?php echo ($item['rental_weeks'] == $i) ? 'selected' : ''; ?>>
+                                                            <?php echo $i; ?> wk<?php echo ($i > 1) ? 's' : ''; ?>
+                                                        </option>
+                                                        <?php endfor; ?>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="d-flex justify-content-between align-items-center pt-2 border-top">
+                                                <a href="cart.php?action=remove&cart_id=<?php echo $item['cart_id']; ?>" 
+                                                   class="text-danger small text-decoration-none" 
+                                                   onclick="return confirm('Remove this book from your cart?');">
+                                                    <i class="fas fa-trash-alt me-1"></i> Remove
+                                                </a>
                                                 
-                                                <div class="d-flex justify-content-between align-items-center">
-                                                    <div class="cart-actions">
-                                                        <a href="cart.php?action=remove&cart_id=<?php echo $item['cart_id']; ?>" class="cart-action">
-                                                            <i class="fas fa-trash"></i> Remove
-                                                        </a>
-                                                    </div>
-                                                    
-                                                    <button type="submit" name="update_item" class="btn btn-sm btn-outline-secondary">
-                                                        Update
-                                                    </button>
-                                                </div>
-                                            </form>
-                                        </div>
+                                                <button type="submit" name="update_item" class="btn btn-sm btn-light border py-0 px-2 text-muted" style="font-size: 0.78rem;">
+                                                    Update
+                                                </button>
+                                            </div>
+                                        </form>
                                     </div>
                                 </div>
                             </div>
                             <?php endforeach; ?>
-                            
-                            <div class="cart-summary-mobile d-md-none mt-4">
-                                <div class="cart-summary-row">
-                                    <span>Subtotal (<?php echo count($cartItems); ?> items)</span>
-                                    <span>₱<?php echo number_format($subtotal, 2); ?></span>
-                                </div>
-                            </div>
                         </div>
                     </div>
                     
-                    <!-- Cart Summary -->
+                    <!-- Cart Summary Column -->
                     <div class="col-lg-4">
                         <div class="cart-summary">
-                            <h4 class="mb-4">Order Summary</h4>
+                            <h5>Order Summary</h5>
                             
-                            <div class="promo-code-form">
-                                <input type="text" class="promo-code-input" placeholder="Promo Code">
-                                <button type="button" class="promo-code-button">Submit</button>
+                            <div class="cart-summary-row">
+                                <span>Subtotal (<?php echo count($cartItems); ?> <?php echo count($cartItems) === 1 ? 'item' : 'items'; ?>)</span>
+                                <span id="summarySubtotal" class="fw-semibold text-dark">₱<?php echo number_format($subtotal, 2); ?></span>
                             </div>
                             
                             <div class="cart-summary-row">
-                                <span>Subtotal</span>
-                                <span>₱<?php echo number_format($subtotal, 2); ?></span>
-                            </div>
-                            
-                            <div class="cart-summary-row">
-                                <span>Shipping cost</span>
-                                <span>To be determined at checkout</span>
+                                <span>Shipping Fee</span>
+                                <span class="text-muted small">At checkout</span>
                             </div>
                             
                             <?php if ($discount > 0): ?>
-                            <div class="cart-summary-row">
+                            <div class="cart-summary-row text-success">
                                 <span>Discount</span>
                                 <span>-₱<?php echo number_format($discount, 2); ?></span>
                             </div>
                             <?php endif; ?>
                             
-                            <div class="cart-summary-row border-top pt-2">
-                                <span class="fw-bold">Estimated Total</span>
-                                <span class="fw-bold">₱<?php echo number_format($total, 2); ?></span>
+                            <div class="cart-summary-row total-row">
+                                <span>Total</span>
+                                <span id="summaryTotal" class="text-dark">₱<?php echo number_format($total, 2); ?></span>
                             </div>
                             
-                            <div class="free-shipping-message">
-                                <div>Note: ₱60 shipping fee will be added for Cash on Delivery</div>
-                                <div class="free-shipping-bubble">
-                                    <i class="fas fa-truck"></i>
-                                </div>
-                            </div>
-                            
-                            <a href="checkout.php" class="checkout-button text-center text-decoration-none <?php echo empty($cartItems) ? 'disabled' : ''; ?>">
-                                <i class="fas fa-lock me-2"></i> Checkout
+                            <a href="checkout.php" class="checkout-button <?php echo empty($cartItems) ? 'disabled' : ''; ?>">
+                                Checkout
                             </a>
+
+                            <div class="text-muted small mt-3 text-center" style="font-size: 0.8rem;">
+                                <i class="fas fa-shield-alt text-success me-1"></i> Secure payment & COD available
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1231,6 +727,8 @@ $_SESSION['cart_details'] = [
             </div>
         </div>
     </div>
+
+    <?php include("include/footer.php"); ?>
 
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -1278,12 +776,16 @@ $_SESSION['cart_details'] = [
             const total = subtotal - discount;
             
             // Update UI with new totals
-            document.querySelector('.cart-summary-row:nth-child(3) span:last-child').textContent = 
-                subtotal > 0 ? `₱${subtotal.toFixed(2)}` : '₱0.00';
+            const subtotalEl = document.getElementById('summarySubtotal') || document.querySelector('.cart-summary-row:nth-child(3) span:last-child');
+            if (subtotalEl) {
+                subtotalEl.textContent = subtotal > 0 ? `₱${subtotal.toFixed(2)}` : '₱0.00';
+            }
                 
             // Update total
-            document.querySelector('.cart-summary-row:nth-child(5) span:last-child').textContent = 
-                `₱${total.toFixed(2)}`;
+            const totalEl = document.getElementById('summaryTotal') || document.querySelector('.cart-summary-row:nth-child(5) span:last-child');
+            if (totalEl) {
+                totalEl.textContent = `₱${total.toFixed(2)}`;
+            }
             
             // Also update mobile summary if it exists
             const mobileSummary = document.querySelector('.cart-summary-mobile');
@@ -1395,6 +897,6 @@ $_SESSION['cart_details'] = [
             });
         });
     });
-</script>
+    </script>
 </body>
 </html>

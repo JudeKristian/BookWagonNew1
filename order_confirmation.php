@@ -6,603 +6,400 @@ $userType = $_SESSION['usertype'] ?? '';
 $userId = $_SESSION['id'] ?? 0;
 
 // Redirect if not logged in
-if (!isset($_SESSION['id'])) {
+if (!isset($_SESSION['id']) || empty($userId)) {
     header("Location: login.php");
     exit();
 }
 
 // Get order ID from URL
-$orderId = $_GET['order_id'] ?? 0;
+$orderId = isset($_GET['order_id']) ? intval($_GET['order_id']) : 0;
+
+if ($orderId <= 0) {
+    header("Location: account.php");
+    exit();
+}
 
 // Fetch order details
 $orderQuery = "SELECT o.*, 
-               COALESCE(o.total_amount, 
-                   (SELECT SUM(oi.quantity * oi.unit_price) 
-                    FROM order_items oi 
-                    WHERE oi.order_id = o.order_id)
-               ) AS total_amount,
                (SELECT GROUP_CONCAT(DISTINCT CONCAT(u2.firstname, ' ', u2.lastname) SEPARATOR ', ') 
                 FROM order_items oi2 
                 JOIN books b2 ON oi2.book_id = b2.book_id 
                 JOIN users u2 ON b2.user_id = u2.id 
                 WHERE oi2.order_id = o.order_id) AS sellers
                FROM orders o
-               WHERE o.order_id = ? AND o.user_id = ?
-               GROUP BY o.order_id";
-               
+               WHERE o.order_id = ? AND o.user_id = ?";
 $orderStmt = $conn->prepare($orderQuery);
 $orderStmt->bind_param("ii", $orderId, $userId);
 $orderStmt->execute();
 $orderResult = $orderStmt->get_result();
 
 if ($orderResult->num_rows === 0) {
-    // Order not found or doesn't belong to this user
-    header("Location: cart.php");
+    header("Location: account.php");
     exit();
 }
 
 $order = $orderResult->fetch_assoc();
 
-// If total amount is still 0, try to update it from order items
-if ($order['total_amount'] <= 0) {
-    $recalculateQuery = "
-    SELECT SUM(oi.unit_price * oi.quantity) AS total_amount
-    FROM order_items oi
-    WHERE oi.order_id = ?
-    ";
-    $recalculateStmt = $conn->prepare($recalculateQuery);
-    $recalculateStmt->bind_param("i", $orderId);
-    $recalculateStmt->execute();
-    $recalculateResult = $recalculateStmt->get_result();
-    $recalculatedData = $recalculateResult->fetch_assoc();
-    $recalculatedTotal = $recalculatedData['total_amount'] ?? 0;
-    
-    if ($recalculatedTotal > 0) {
-        // Update the order with the correct total
-        $updateTotalStmt = $conn->prepare("UPDATE orders SET total_amount = ? WHERE order_id = ?");
-        $updateTotalStmt->bind_param("di", $recalculatedTotal, $orderId);
-        $updateTotalStmt->execute();
-        
-        $order['total_amount'] = $recalculatedTotal;
-    }
-}
-
 // Fetch order items
-$itemsQuery = "SELECT oi.*, oi.unit_price AS item_unit_price, b.title, b.author, b.cover_image, b.price, b.rent_price
+$itemsQuery = "SELECT oi.*, b.title, b.author, b.cover_image, b.price, b.rent_price
                FROM order_items oi
                JOIN books b ON oi.book_id = b.book_id
                WHERE oi.order_id = ?";
 $itemsStmt = $conn->prepare($itemsQuery);
 $itemsStmt->bind_param("i", $orderId);
 $itemsStmt->execute();
-$itemsResult = $itemsStmt->get_result();
-$orderItems = $itemsResult->fetch_all(MYSQLI_ASSOC);
+$orderItems = $itemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Determine order status text and next steps based on payment method
-$statusText = "";
-$nextStepsHtml = "";
+$hasRentals = false;
+$itemsSubtotal = 0;
+foreach ($orderItems as $item) {
+    if ($item['purchase_type'] === 'rent') {
+        $hasRentals = true;
+    }
+    $itemsSubtotal += ($item['unit_price'] * $item['quantity']);
+}
 
-switch($order['payment_method']) {
-    case 'cod':
-        $statusText = "Pending";
-        $statusIcon = "fa-clock";
-        $statusClass = "text-warning";
-        $nextStepsHtml = '
-            <div class="next-step">
-                <div class="step-icon bg-warning text-white">
-                    <i class="fas fa-truck"></i>
-                </div>
-                <div class="step-content">
-                    <h5>Prepare for Delivery</h5>
-                    <p>Your order will be delivered to your address. Please prepare the exact amount for payment upon delivery.</p>
-                </div>
-            </div>
-        ';
-        break;
-        
-    case 'pickup':
-        $statusText = "Ready for Pickup";
-        $statusIcon = "fa-store";
-        $statusClass = "text-info";
-        $nextStepsHtml = '
-            <div class="next-step">
-                <div class="step-icon bg-info text-white">
-                    <i class="fas fa-map-marker-alt"></i>
-                </div>
-                <div class="step-content">
-                    <h5>Visit the Pickup Location</h5>
-                    <p>Please visit the selected location on your chosen date and bring the exact amount for payment.</p>
-                    <div class="pickup-details">
-                        <div class="pickup-detail-row">
-                            <div class="pickup-label">Location:</div>
-                            <div class="pickup-value">' . htmlspecialchars($order['pickup_location'] ?? 'To be confirmed') . '</div>
-                        </div>
-                        <div class="pickup-detail-row">
-                            <div class="pickup-label">Date:</div>
-                            <div class="pickup-value">' . date('F j, Y', strtotime($order['pickup_date'] ?? 'now')) . '</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        ';
-        break;
-        
-    case 'bank_transfer':
-        if ($order['payment_status'] == 'awaiting_payment') {
-            $statusText = "Awaiting Payment";
-            $statusIcon = "fa-university";
-            $statusClass = "text-warning";
-            $nextStepsHtml = '
-                <div class="next-step">
-                    <div class="step-icon bg-warning text-white">
-                        <i class="fas fa-money-bill-wave"></i>
-                    </div>
-                    <div class="step-content">
-                        <h5>Complete Your Bank Transfer</h5>
-                        <p>Please complete your bank transfer and upload the receipt to process your order.</p>
-                        <a href="bank_transfer_instructions.php?order_id=' . $orderId . '" class="btn btn-primary mt-2">
-                            <i class="fas fa-credit-card me-2"></i>Go to Payment Instructions
-                        </a>
-                    </div>
-                </div>
-            ';
-        } elseif ($order['payment_status'] == 'verification_pending') {
-            $statusText = "Payment Verification";
-            $statusIcon = "fa-check-circle";
-            $statusClass = "text-info";
-            $nextStepsHtml = '
-                <div class="next-step">
-                    <div class="step-icon bg-info text-white">
-                        <i class="fas fa-hourglass-half"></i>
-                    </div>
-                    <div class="step-content">
-                        <h5>Payment Being Verified</h5>
-                        <p>Your payment is being verified. This typically takes 1-2 business days. We\'ll notify you once verification is complete.</p>
-                    </div>
-                </div>
-            ';
-        }
-        break;
-        
-    default:
-        $statusText = "Processing";
-        $statusIcon = "fa-spinner fa-spin";
-        $statusClass = "text-primary";
+// Payment method display formatting
+$paymentDisplay = 'Unknown';
+$isPaid = ($order['payment_status'] === 'paid');
+
+if ($order['payment_method'] === 'qrph') {
+    $paymentDisplay = 'QR Ph (GCash / Maya)';
+} elseif ($order['payment_method'] === 'cod') {
+    $paymentDisplay = 'Cash on Delivery / Meet-up';
+} elseif ($order['payment_method'] === 'pickup') {
+    $paymentDisplay = 'Campus Meet-up';
+} elseif ($order['payment_method'] === 'bank') {
+    $paymentDisplay = 'Bank Transfer';
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order Confirmation - BookWagon</title>
-    <!-- Bootstrap CSS -->
+    <title>Order Confirmation #<?php echo $orderId; ?> - BookWagon</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
+    
     <style>
         :root {
-            --primary-color: #f8a100;
-            --secondary-color: #f8f9fa;
-            --text-dark: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
+            --bw-primary: #f8a100;
+            --bw-primary-hover: #e09000;
+            --bw-dark: #1e293b;
+            --bw-muted: #64748b;
+            --bw-border: #e9ecef;
         }
-        
+
         body {
-            font-family: 'Arial', sans-serif;
-            color: var(--text-dark);
-            background-color: #f4f6f9;
-        }
-        .navbar {
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .navbar-brand img {
-            height: 60px;
-        }
-        
-        .confirmation-container {
-            max-width: 800px;
-            margin: 40px auto;
-        }
-        
-        .confirmation-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .success-icon {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            background-color: #28a745;
-            color: white;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #fafbfc;
+            color: var(--bw-dark);
+            min-height: 100vh;
             display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 40px;
-            margin: 0 auto 20px;
+            flex-direction: column;
         }
-        
-        .confirmation-card {
-            background-color: #fff;
+
+        .confirm-card {
+            background: #ffffff;
+            border: 1px solid var(--bw-border);
             border-radius: 10px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
-            overflow: hidden;
-            margin-bottom: 30px;
-        }
-        
-        .confirmation-section {
-            padding: 25px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .confirmation-section:last-child {
-            border-bottom: none;
-        }
-        
-        .order-info {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
-        }
-        
-        .order-info-item {
-            margin-bottom: 0;
-        }
-        
-        .order-info-label {
-            font-weight: bold;
-            display: block;
-            margin-bottom: 5px;
-            color: var(--text-muted);
-            font-size: 0.9rem;
-        }
-        
-        .order-info-value {
-            font-weight: 500;
-        }
-        
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 8px 15px;
-            border-radius: 20px;
-            font-weight: 600;
-            margin-top: 10px;
-        }
-        
-        .status-icon {
-            margin-right: 8px;
-        }
-        
-        .order-items {
-            margin-top: 20px;
-        }
-        
-        .order-item {
-            display: flex;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .order-item:last-child {
-            border-bottom: none;
-        }
-        
-        .order-item-image {
-            width: 70px;
-            height: 100px;
-            object-fit: cover;
-            margin-right: 15px;
-            border-radius: 5px;
-        }
-        
-        .order-item-details {
-            flex-grow: 1;
-        }
-        
-        .order-item-title {
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        
-        .order-item-author {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            margin-bottom: 5px;
-        }
-        
-        .order-item-type {
-            font-size: 0.8rem;
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 3px;
-            background-color: #e9ecef;
-            margin-right: 10px;
-        }
-        
-        .order-item-price {
-            font-weight: 600;
-            text-align: right;
-        }
-        
-        .order-item-quantity {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            text-align: right;
-        }
-        
-        .order-summary {
-            padding: 20px;
-            background-color: #f8f9fa;
-            border-radius: 5px;
-            margin-top: 20px;
-        }
-        
-        .summary-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-        }
-        
-        .summary-row:last-child {
-            margin-bottom: 0;
-            padding-top: 10px;
-            border-top: 1px solid var(--border-color);
-            font-weight: bold;
-        }
-        
-        .next-steps {
-            margin-top: 20px;
-        }
-        
-        .next-step {
-            display: flex;
-            align-items: flex-start;
+            padding: 24px;
             margin-bottom: 20px;
         }
-        
-        .step-icon {
-            width: 40px;
-            height: 40px;
+
+        .status-header {
+            text-align: center;
+            padding: 20px 0 10px 0;
+        }
+
+        .check-circle {
+            width: 54px;
+            height: 54px;
+            background: #ecfdf5;
+            color: #059669;
+            border: 1.5px solid #a7f3d0;
             border-radius: 50%;
-            display: flex;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-right: 15px;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .order-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            background: #f8fafc;
+            border: 1px solid #f1f5f9;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 20px 0;
+        }
+
+        .meta-label {
+            font-size: 0.75rem;
+            color: var(--bw-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+
+        .meta-value {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--bw-dark);
+        }
+
+        .item-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .item-row:last-child {
+            border-bottom: none;
+        }
+
+        .item-thumb {
+            width: 46px;
+            height: 62px;
+            object-fit: cover;
+            border-radius: 4px;
+            border: 1px solid var(--bw-border);
+            background: #f8fafc;
             flex-shrink: 0;
         }
-        
-        .step-content {
-            flex-grow: 1;
-        }
-        
-        .pickup-details {
-            background-color: #f8f9fa;
-            border-radius: 5px;
-            padding: 15px;
-            margin-top: 10px;
-        }
-        
-        .pickup-detail-row {
-            display: flex;
-            margin-bottom: 10px;
-        }
-        
-        .pickup-detail-row:last-child {
-            margin-bottom: 0;
-        }
-        
-        .pickup-label {
-            width: 80px;
+
+        .item-title {
+            font-size: 0.9rem;
             font-weight: 600;
+            color: var(--bw-dark);
+            margin-bottom: 3px;
         }
-        
-        .pickup-value {
-            flex: 1;
+
+        .item-sub {
+            font-size: 0.78rem;
+            color: var(--bw-muted);
         }
-        
-        .action-buttons {
+
+        .item-price {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--bw-dark);
+            white-space: nowrap;
+        }
+
+        .summary-line {
             display: flex;
             justify-content: space-between;
-            margin-top: 30px;
+            font-size: 0.86rem;
+            color: var(--bw-muted);
+            margin-bottom: 8px;
         }
-        
-        .action-btn {
-            padding: 12px 20px;
-            border-radius: 5px;
+
+        .summary-line.total {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--bw-dark);
+            border-top: 1px solid var(--bw-border);
+            padding-top: 10px;
+            margin-top: 10px;
+            margin-bottom: 0;
+        }
+
+        .btn-action-primary {
+            background: var(--bw-primary);
+            color: #ffffff;
             font-weight: 600;
-            transition: all 0.2s;
+            font-size: 0.88rem;
+            border-radius: 6px;
+            padding: 10px 18px;
+            border: none;
             text-decoration: none;
+            display: inline-block;
+            transition: background 0.15s ease;
         }
-        
-        .primary-btn {
-            background-color: var(--primary-color);
-            color: white;
+
+        .btn-action-primary:hover {
+            background: var(--bw-primary-hover);
+            color: #ffffff;
         }
-        
-        .primary-btn:hover {
-            background-color: #e69400;
-            color: white;
-            transform: translateY(-2px);
+
+        .btn-action-secondary {
+            background: #ffffff;
+            color: var(--bw-dark);
+            border: 1px solid #cbd5e1;
+            font-weight: 600;
+            font-size: 0.88rem;
+            border-radius: 6px;
+            padding: 10px 18px;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.15s ease;
         }
-        
-        .secondary-btn {
-            background-color: var(--secondary-color);
-            color: var(--text-dark);
-        }
-        
-        .secondary-btn:hover {
-            background-color: #e9ecef;
-            transform: translateY(-2px);
+
+        .btn-action-secondary:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+            color: var(--bw-dark);
         }
     </style>
 </head>
 <body>
-    <!-- Include Header -->
+
+    <!-- Header Navigation -->
     <?php include("include/user_header.php"); ?>
 
-    <div class="container confirmation-container">
-        <?php if (isset($_SESSION['upload_success'])): ?>
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            <?php echo $_SESSION['upload_success']; unset($_SESSION['upload_success']); ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-        <?php endif; ?>
+    <div class="container my-4 flex-grow-1" style="max-width: 720px;">
         
-        <?php if (isset($_SESSION['payment_success']) || isset($_SESSION['order_completed'])): ?>
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            <?php if (isset($_SESSION['order_completed'])): ?>
-                <strong>Order Completed!</strong> Your order has been processed successfully.
-                <?php unset($_SESSION['order_completed']); ?>
-            <?php else: ?>
-                Your order has been placed successfully!
-                <?php unset($_SESSION['payment_success']); ?>
-            <?php endif; ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-        <?php endif; ?>
-        
-        <div class="confirmation-header">
-            <div class="success-icon">
-                <i class="fas fa-check"></i>
-            </div>
-            <h2>Thank You for Your Order!</h2>
-            <p>Your order has been received and is being processed.</p>
-        </div>
-        
-        <div class="confirmation-card">
-            <div class="confirmation-section">
-                <h4 class="mb-4">Order Information</h4>
-                
-                <div class="order-info">
-                    <div class="order-info-item">
-                        <span class="order-info-label">Order Number</span>
-                        <span class="order-info-value">#<?php echo $orderId; ?></span>
-                    </div>
-                    
-                    <div class="order-info-item">
-                        <span class="order-info-label">Order Date</span>
-                        <span class="order-info-value"><?php echo date('F j, Y, g:i a', strtotime($order['order_date'])); ?></span>
-                    </div>
-                    
-                    <div class="order-info-item">
-                        <span class="order-info-label">Payment Method</span>
-                        <span class="order-info-value">
-                            <?php
-                            switch($order['payment_method']) {
-                                case 'cod':
-                                    echo 'Cash on Delivery';
-                                    break;
-                                case 'pickup':
-                                    echo 'Pickup/Meet-up';
-                                    break;
-                                case 'bank_transfer':
-                                    echo 'Bank Transfer';
-                                    break;
-                                default:
-                                    echo ucfirst($order['payment_method'] ?? 'Not specified');
-                            }
-                            ?>
-                        </span>
-                    </div>
-                    
-                    <div class="order-info-item">
-                        <span class="order-info-label">Seller(s)</span>
-                        <span class="order-info-value"><?php echo htmlspecialchars($order['sellers'] ?? 'Various sellers'); ?></span>
-                    </div>
-                </div>
-                
-                <div class="status-badge <?php echo $statusClass; ?> bg-light">
-                    <i class="fas <?php echo $statusIcon; ?> status-icon"></i>
-                    <?php echo $statusText; ?>
-                </div>
-            </div>
+        <div class="confirm-card">
             
-            <div class="confirmation-section">
-                <h4 class="mb-4">Order Items</h4>
-                
-                <div class="order-items">
-                    <?php foreach ($orderItems as $item): ?>
-                        <?php 
-                        // Set default purchase type based on price comparison if empty
-                        if (empty($item['purchase_type'])) {
-                            $item['purchase_type'] = ($item['item_unit_price'] < $item['price']) ? 'rent' : 'buy';
-                        }
-                        ?>
-                        <div class="order-item">
-                    <img src="<?php echo $item['cover_image']; ?>" alt="<?php echo htmlspecialchars($item['title']); ?>" class="order-item-image">
-                    
-                    <div class="order-item-details">
-                        <div class="order-item-title"><?php echo htmlspecialchars($item['title']); ?></div>
-                        <div class="order-item-author">by <?php echo htmlspecialchars($item['author']); ?></div>
-                        
-                        <span class="order-item-type">
-                            <?php if ($item['purchase_type'] == 'rent'): ?>
-                                Rented for <?php echo $item['rental_weeks']; ?> week<?php echo $item['rental_weeks'] > 1 ? 's' : ''; ?>
-                            <?php else: ?>
-                                Purchased
-                            <?php endif; ?>
-                        </span>
-                    </div>
-                        
-                    <div class="ms-auto">
-                        <div class="order-item-price">
-                            ₱<?php echo number_format($item['item_unit_price'], 2); ?>
-                        </div>
-                        <div class="order-item-quantity">Qty: <?php echo $item['quantity']; ?></div>
+            <!-- Status Header -->
+            <div class="status-header">
+                <div class="check-circle">✓</div>
+                <h4 class="fw-bold mb-1">Thank You! Your Order is Placed</h4>
+                <p class="text-muted mb-0" style="font-size: 0.85rem;">
+                    Order <strong>#<?php echo $orderId; ?></strong> has been received and is now being processed.
+                </p>
+            </div>
+
+            <!-- Key Meta Information -->
+            <div class="order-meta-grid">
+                <div>
+                    <div class="meta-label">Date Placed</div>
+                    <div class="meta-value"><?php echo date('M j, Y', strtotime($order['order_date'])); ?></div>
+                </div>
+                <div>
+                    <div class="meta-label">Payment Method</div>
+                    <div class="meta-value">
+                        <?php echo htmlspecialchars($paymentDisplay); ?>
+                        <?php if ($isPaid): ?>
+                            <span class="badge bg-success ms-1" style="font-size: 0.68rem;">Paid</span>
+                        <?php endif; ?>
                     </div>
                 </div>
-                    <?php endforeach; ?>
-                    
-                    <div class="order-summary">
-                        <div class="summary-row">
-                            <span>Subtotal</span>
-                            <span>₱<?php echo number_format($order['total_amount'], 2); ?></span>
-                        </div>
-                        <div class="summary-row">
-                            <span>Total</span>
-                            <span>₱<?php echo number_format($order['total_amount'], 2); ?></span>
+                <div>
+                    <div class="meta-label">Total Amount</div>
+                    <div class="meta-value">₱<?php echo number_format($order['total_amount'], 2); ?></div>
+                </div>
+                <?php if (!empty($order['payment_receipt'])): ?>
+                    <div>
+                        <div class="meta-label">Transaction Ref</div>
+                        <div class="meta-value" style="font-family: monospace; font-size: 0.82rem;">
+                            <?php echo htmlspecialchars($order['payment_receipt']); ?>
                         </div>
                     </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- Delivery Address -->
+            <div class="mb-4">
+                <div class="text-muted fw-semibold mb-1" style="font-size: 0.78rem; text-transform: uppercase;">
+                    Recipient & Delivery
+                </div>
+                <div style="font-size: 0.88rem;">
+                    <strong><?php echo htmlspecialchars($order['first_name'] . ' ' . $order['last_name']); ?></strong> 
+                    • <?php echo htmlspecialchars($order['phone']); ?>
+                </div>
+                <div class="text-muted" style="font-size: 0.84rem;">
+                    <?php echo htmlspecialchars($order['address'] . ', ' . $order['city']); ?>
+                </div>
+                <?php if (!empty($order['notes'])): ?>
+                    <div class="text-muted mt-1" style="font-size: 0.8rem; font-style: italic;">
+                        Notes: <?php echo htmlspecialchars($order['notes']); ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- Items Ordered -->
+            <div class="mb-3">
+                <div class="text-muted fw-semibold mb-2" style="font-size: 0.78rem; text-transform: uppercase;">
+                    Items Summary
+                </div>
+                
+                <?php foreach ($orderItems as $item): ?>
+                    <div class="item-row">
+                        <img src="<?php echo htmlspecialchars(!empty($item['cover_image']) ? (strpos($item['cover_image'], 'uploads/') === 0 ? $item['cover_image'] : 'uploads/covers/' . $item['cover_image']) : 'uploads/covers/default_book.jpg'); ?>" 
+                             alt="Cover" class="item-thumb" onerror="this.src='uploads/covers/default_book.jpg'">
+                        
+                        <div class="flex-grow-1">
+                            <div class="item-title"><?php echo htmlspecialchars($item['title']); ?></div>
+                            <div class="item-sub">
+                                <?php if ($item['purchase_type'] === 'rent'): ?>
+                                    <span class="badge bg-warning text-dark me-1" style="font-size: 0.68rem;">Rent (<?php echo (int)$item['rental_weeks']; ?> wks)</span>
+                                <?php else: ?>
+                                    <span class="badge bg-secondary text-white me-1" style="font-size: 0.68rem;">Buy</span>
+                                <?php endif; ?>
+                                Qty: <?php echo (int)$item['quantity']; ?>
+                            </div>
+                        </div>
+
+                        <div class="item-price">
+                            ₱<?php echo number_format($item['unit_price'] * $item['quantity'], 2); ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+
+            <!-- Cost Summary Breakdown -->
+            <div class="p-3 mb-4" style="background: #f8fafc; border-radius: 8px;">
+                <div class="summary-line">
+                    <span>Items Subtotal</span>
+                    <span class="fw-semibold text-dark">₱<?php echo number_format($itemsSubtotal, 2); ?></span>
+                </div>
+                <?php 
+                $depositTotal = max(0, $order['total_amount'] - $itemsSubtotal - (float)$order['shipping_fee']);
+                if ($depositTotal > 0): 
+                ?>
+                    <div class="summary-line text-success">
+                        <span>Security Deposit (Refundable upon return)</span>
+                        <span class="fw-semibold">₱<?php echo number_format($depositTotal, 2); ?></span>
+                    </div>
+                <?php endif; ?>
+                <div class="summary-line">
+                    <span>Delivery / Shipping</span>
+                    <span class="fw-semibold text-dark">
+                        <?php echo ($order['shipping_fee'] > 0) ? '₱' . number_format($order['shipping_fee'], 2) : 'Free'; ?>
+                    </span>
+                </div>
+                <div class="summary-line total">
+                    <span>Total Paid</span>
+                    <span>₱<?php echo number_format($order['total_amount'], 2); ?></span>
                 </div>
             </div>
-            
-            <div class="confirmation-section">
-                <h4 class="mb-4">Next Steps</h4>
-                
-                <div class="next-steps">
-                    <?php echo $nextStepsHtml; ?>
-                    
-                    <div class="next-step">
-                        <div class="step-icon bg-primary text-white">
-                            <i class="fas fa-envelope"></i>
-                        </div>
-                        <div class="step-content">
-                            <h5>Check Your Email</h5>
-                            <p>We've sent a confirmation email to your registered email address with all the details of your order.</p>
-                        </div>
-                    </div>
+
+            <!-- Action Buttons -->
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 pt-2">
+                <a href="rentbooks.php" class="btn-action-secondary">
+                    ← Continue Browsing
+                </a>
+
+                <div class="d-flex gap-2">
+                    <?php if ($hasRentals): ?>
+                        <a href="rented_books.php?tab=rentals" class="btn-action-secondary">
+                            My Rented Books
+                        </a>
+                    <?php endif; ?>
+                    <a href="history.php" class="btn-action-primary">
+                        View Order History →
+                    </a>
                 </div>
             </div>
+
         </div>
-        
-        <div class="action-buttons">
-            <a href="order_history.php" class="action-btn secondary-btn">
-                <i class="fas fa-list me-2"></i>View My Orders
-            </a>
-            <a href="rentbooks.php" class="action-btn primary-btn">
-                <i class="fas fa-book me-2"></i>Continue Shopping
-            </a>
-        </div>
+
     </div>
 
-    <!-- Bootstrap JS -->
+    <!-- Global Footer -->
+    <?php include("include/footer.php"); ?>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

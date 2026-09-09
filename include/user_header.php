@@ -18,6 +18,52 @@
             <?php endif; ?>
             
             <?php
+            // Notification helpers
+            if (!function_exists('getNotificationUrl')) {
+                function getNotificationUrl($notification) {
+                    $uId = $_SESSION['id'] ?? 0;
+                    switch ($notification['type'] ?? '') {
+                        case 'buddy_request':
+                            return 'profile.php?id=' . $uId;
+                        case 'buddy_accepted':
+                            return 'profile.php?id=' . ($notification['sender_id'] ?? $uId);
+                        case 'order_shipped':
+                        case 'order_delivered':
+                            return 'history.php';
+                        case 'rental_approved':
+                        case 'rental_due':
+                            return 'rented_books.php';
+                        case 'payment_confirmed':
+                            return 'history.php';
+                        default:
+                            return 'notifications.php?mode=buyer';
+                    }
+                }
+            }
+
+            if (!function_exists('timeAgo')) {
+                function timeAgo($dateString) {
+                    if (empty($dateString)) return '';
+                    $date = new DateTime($dateString);
+                    $now = new DateTime();
+                    $diff = $now->getTimestamp() - $date->getTimestamp();
+                    if ($diff < 60) {
+                        return 'just now';
+                    } elseif ($diff < 3600) {
+                        $minutes = floor($diff / 60);
+                        return $minutes . ($minutes == 1 ? ' minute ago' : ' minutes ago');
+                    } elseif ($diff < 86400) {
+                        $hours = floor($diff / 3600);
+                        return $hours . ($hours == 1 ? ' hour ago' : ' hours ago');
+                    } elseif ($diff < 2592000) {
+                        $days = floor($diff / 86400);
+                        return $days . ($days == 1 ? ' day ago' : ' days ago');
+                    } else {
+                        return date('M j, Y', $date->getTimestamp());
+                    }
+                }
+            }
+
             // Buyer-mode notification types
             $buyerNotifTypes = "'buddy_request','buddy_accepted','order_shipped','order_delivered','rental_approved','rental_due','payment_confirmed'";
 
@@ -682,29 +728,4 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
-
-<?php
-// Helper function to determine the notification URL based on type
-if (!function_exists('getNotificationUrl')) {
-    function getNotificationUrl($notification) {
-        switch ($notification['type']) {
-            case 'buddy_request':
-                return 'profile.php?id=' . $_SESSION['id'];
-            case 'buddy_accepted':
-                return 'profile.php?id=' . $notification['sender_id'];
-            case 'order_shipped':
-            case 'order_delivered':
-                return 'history.php';
-            case 'rental_approved':
-            case 'rental_due':
-                return 'rented_books.php';
-            case 'payment_confirmed':
-                return 'history.php';
-            default:
-                return 'notifications.php?mode=buyer';
-        }
-    }
-}
-
-// Helper function for time ago formatting
-?>
+

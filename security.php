@@ -147,6 +147,15 @@ $h_stmt->close();
             margin-bottom: 30px;
             border: 1px solid var(--border-color);
         }
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f8fafc;
+        }
     </style>
 </head>
 
@@ -157,32 +166,12 @@ $h_stmt->close();
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-                    <a href="collections.php" class="sidebar-link">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-                    <a href="history.php" class="sidebar-link">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link active">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
 
             <!-- Main Content Column -->
-            <div class="col-md-9">
+            <div class="col-lg-9 col-md-8">
 
                 <?php if (isset($_SESSION['success_message'])): ?>
                     <div class="alert alert-success alert-dismissible fade show" role="alert">

@@ -32,11 +32,19 @@ $returnsQuery = "
         b.title as book_title,
         b.author as book_author,
         b.cover_image,
+        b.ISBN,
+        sel.shop_name as seller_shop,
+        COALESCE(NULLIF(sel.first_name, ''), s.firstname) as seller_firstname,
+        COALESCE(NULLIF(sel.last_name, ''), s.lastname) as seller_lastname,
+        COALESCE(NULLIF(sel.business_email, ''), s.email) as seller_email,
+        COALESCE(NULLIF(sel.business_phone, ''), s.phone) as seller_phone,
         r.rental_weeks,
         r.total_price
     FROM book_returns br
     JOIN book_rentals r ON br.rental_id = r.rental_id
     JOIN books b ON br.book_id = b.book_id
+    LEFT JOIN sellers sel ON br.seller_id = sel.id
+    LEFT JOIN users s ON COALESCE(sel.user_id, b.user_id) = s.id
     WHERE br.user_id = ?
     ORDER BY br.request_date DESC
 ";
@@ -66,7 +74,7 @@ $historyQuery = "
     FROM orders o
     JOIN order_items oi ON o.order_id = oi.order_id
     JOIN books b ON oi.book_id = b.book_id
-    WHERE o.user_id = ? AND o.order_status IN ('completed', 'cancelled', 'delivered')
+    WHERE o.user_id = ?
     ORDER BY date DESC
 ";
 
@@ -88,9 +96,15 @@ $activeTab = $_GET['tab'] ?? 'all';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Order & Rental History - BookWagon</title>
     <!-- Bootstrap CSS -->
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/tab.css">
+    
     <style>
         /* Similar styles to rented_books.php */
         :root {
@@ -101,9 +115,9 @@ $activeTab = $_GET['tab'] ?? 'all';
             --border-color: #dee2e6;
         }
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: #f8fafc;
         }
 
         .navbar {
@@ -247,6 +261,206 @@ $activeTab = $_GET['tab'] ?? 'all';
             height: 3px;
             background-color: #f8a100;
         }
+
+        /* Clean Status Badges */
+        .badge-clean {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 4px 9px;
+            border-radius: 6px;
+            letter-spacing: 0.2px;
+            line-height: 1.2;
+        }
+
+        .badge-clean.badge-pending {
+            background: #fffbeb;
+            color: #b45309;
+            border: 1px solid #fde68a;
+        }
+
+        .badge-clean.badge-in-transit {
+            background: #eff6ff;
+            color: #1d4ed8;
+            border: 1px solid #bfdbfe;
+        }
+
+        .badge-clean.badge-completed {
+            background: #ecfdf5;
+            color: #047857;
+            border: 1px solid #a7f3d0;
+        }
+
+        .badge-clean.badge-cancelled {
+            background: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+        }
+
+        .badge-clean.badge-neutral {
+            background: #f8fafc;
+            color: #475569;
+            border: 1px solid #e2e8f0;
+        }
+
+        /* Return Details Modal Modern Styling */
+        .det-modal-dialog {
+            max-width: 580px;
+        }
+
+        .det-modal-content {
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .det-stepper-wrap {
+            position: relative;
+            padding: 14px 16px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 14px;
+        }
+
+        .det-stepper {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            z-index: 2;
+        }
+
+        .det-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            flex: 1;
+        }
+
+        .det-step-bubble {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #f1f5f9;
+            color: #64748b;
+            border: 2px solid #cbd5e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+            transition: all 0.25s ease;
+        }
+
+        .det-step.completed .det-step-bubble {
+            background: #059669;
+            color: #ffffff;
+            border-color: #059669;
+        }
+
+        .det-step.active .det-step-bubble {
+            background: #0f172a;
+            color: #ffffff;
+            border-color: #0f172a;
+        }
+
+        .det-step-name {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #0f172a;
+            line-height: 1.2;
+        }
+
+        .det-step-time {
+            font-size: 0.68rem;
+            color: #64748b;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .det-stepper-bar {
+            position: absolute;
+            top: 28px;
+            left: 18%;
+            right: 18%;
+            height: 2px;
+            background: #e2e8f0;
+            z-index: 1;
+        }
+
+        .det-stepper-fill {
+            height: 100%;
+            background: #059669;
+            width: 0%;
+            transition: width 0.35s ease;
+        }
+
+        .det-card-section {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 13px 15px;
+            margin-bottom: 12px;
+        }
+
+        .det-sec-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #64748b;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .det-meetup-box {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+
+        .det-fee-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .btn-clean-outline {
+            background: #ffffff;
+            color: #0f172a;
+            border: 1px solid #cbd5e1;
+            font-size: 0.8rem;
+            font-weight: 500;
+            padding: 6px 13px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .btn-clean-outline:hover {
+            background: #f8fafc;
+            border-color: #94a3b8;
+            color: #0f172a;
+        }
     </style>
 </head>
 
@@ -256,35 +470,13 @@ $activeTab = $_GET['tab'] ?? 'all';
     <div class="container py-5">
         <div class="row">
             <!-- Sidebar Column -->
-            <div class="col-md-3 mb-4">
-                <div class="sidebar">
-                    <h4 class="px-4 mb-4">My Profile</h4>
-                    <a href="account.php" class="sidebar-link">
-                        <i class="fa-solid fa-user"></i> Account
-                    </a>
-                    <a href="cart.php" class="sidebar-link">
-                        <i class="fa-solid fa-shopping-cart"></i> Cart
-                    </a>
-                    <a href="rented_books.php" class="sidebar-link">
-                        <i class="fa-solid fa-book"></i> Rented Books
-                    </a>
-
-                    <a href="collections.php" class="sidebar-link">
-                        <i class="fa-solid fa-bookmark"></i> My Collections
-                    </a>
-
-                    <a href="history.php" class="sidebar-link active">
-                        <i class="fa-solid fa-clock-rotate-left"></i> Order History
-                    </a>
-                    <a href="security.php" class="sidebar-link">
-                        <i class="fa-solid fa-shield-halved"></i> Security Settings
-                    </a>
-                </div>
+            <div class="col-lg-3 col-md-4 mb-4">
+                <?php include("include/user_sidebar.php"); ?>
             </div>
 
             <!-- Main Content Column -->
-            <div class="col-md-9">
-                <h2 class="mb-4">Order & Rental History</h2>
+            <div class="col-lg-9 col-md-8">
+                <h2 class="mb-4" style="font-weight: 700; color: #0f172a;">Order & Rental History</h2>
 
                 <!-- Success/Error Messages -->
                 <?php if (isset($_SESSION['success_message'])): ?>
@@ -535,12 +727,20 @@ $activeTab = $_GET['tab'] ?? 'all';
                                                 <?php endif; ?>
 
                                                 <!-- View Details Button for Returns -->
-                                                <button type="button" class="btn btn-sm btn-outline-primary mt-2 return-details-btn"
+                                                <button type="button" class="btn-clean-outline return-details-btn mt-2"
                                                     data-bs-toggle="modal" data-bs-target="#returnDetailsModal"
                                                     data-return-id="<?php echo $item['return_id']; ?>"
+                                                    data-rental-id="<?php echo $item['rental_id'] ?? ''; ?>"
                                                     data-book-title="<?php echo htmlspecialchars($item['book_title']); ?>"
                                                     data-book-author="<?php echo htmlspecialchars($item['book_author']); ?>"
                                                     data-cover-image="<?php echo $item['cover_image']; ?>"
+                                                    data-isbn="<?php echo htmlspecialchars($item['ISBN'] ?? '—'); ?>"
+                                                    data-rental-weeks="<?php echo $item['rental_weeks'] ?? '1'; ?>"
+                                                    data-rental-price="<?php echo number_format($item['total_price'] ?? 0, 2); ?>"
+                                                    data-seller-name="<?php echo htmlspecialchars(trim(($item['seller_firstname'] ?? '') . ' ' . ($item['seller_lastname'] ?? '')) ?: ($item['seller_shop'] ?? 'Book Owner')); ?>"
+                                                    data-seller-shop="<?php echo htmlspecialchars($item['seller_shop'] ?? ''); ?>"
+                                                    data-seller-email="<?php echo htmlspecialchars($item['seller_email'] ?? ''); ?>"
+                                                    data-seller-phone="<?php echo htmlspecialchars($item['seller_phone'] ?? ''); ?>"
                                                     data-status="<?php echo $item['status']; ?>"
                                                     data-method="<?php echo $item['return_method']; ?>"
                                                     data-details="<?php echo htmlspecialchars($item['return_details']); ?>"
@@ -555,7 +755,7 @@ $activeTab = $_GET['tab'] ?? 'all';
                                                     data-is-overdue="<?php echo $item['is_overdue']; ?>"
                                                     data-days-overdue="<?php echo $item['days_overdue']; ?>"
                                                     data-notes="<?php echo htmlspecialchars($item['notes'] ?? ''); ?>">
-                                                    <i class="fas fa-info-circle"></i> View Details
+                                                    <i class="fas fa-eye"></i> View Return Details
                                                 </button>
                                             <?php endif; ?>
                                         </div>
@@ -570,142 +770,181 @@ $activeTab = $_GET['tab'] ?? 'all';
     </div>
 
 
-    <div class="modal fade" id="returnDetailsModal" tabindex="-1" aria-labelledby="returnDetailsModalLabel"
-        aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="returnDetailsModalLabel">Return Request Details</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <!-- ======================================================== -->
+    <!-- View Return Request Details Modal (Clean, Informative & Modern) -->
+    <!-- ======================================================== -->
+    <div class="modal fade" id="returnDetailsModal" tabindex="-1" aria-labelledby="returnDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered det-modal-dialog">
+            <div class="modal-content det-modal-content">
+                <!-- Modal Header -->
+                <div class="modal-header py-3 px-4" style="background: #ffffff; border-bottom: 1px solid #f1f5f9;">
+                    <div>
+                        <div class="d-flex align-items-center gap-2">
+                            <h5 class="modal-title fw-bold mb-0" style="font-size: 1.05rem; color: #0f172a;" id="returnDetailsModalLabel">Return Request Details</h5>
+                            <span id="return_status_badge" class="badge-clean badge-pending">Pending</span>
+                        </div>
+                        <div class="text-muted mt-1" style="font-size: 0.76rem;">
+                            Return #<strong class="text-dark" id="return_request_id"></strong> &bull; 
+                            Rental #<strong class="text-dark" id="return_rental_id"></strong> &bull; 
+                            <span id="return_request_date"></span>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="font-size: 0.75rem;"></button>
                 </div>
-                <div class="modal-body">
-                    <div class="row mb-4">
-                        <div class="col-md-4 text-center">
-                            <img id="return_book_image" src="" alt="Book Cover" class="img-fluid mb-3"
-                                style="max-height: 200px;">
-                            <div id="return_status_badge" class="status-badge d-inline-block"></div>
+
+                <div class="modal-body px-4 py-3" style="font-size: 0.82rem; background: #fafbfc;">
+                    
+                    <!-- Connected Progress Stepper -->
+                    <div class="det-stepper-wrap">
+                        <div class="det-stepper-bar">
+                            <div class="det-stepper-fill" id="detStepperFill"></div>
                         </div>
-                        <div class="col-md-8">
-                            <h4 id="return_book_title" class="mb-1"></h4>
-                            <p class="text-muted mb-3" id="return_book_author"></p>
+                        <div class="det-stepper">
+                            <!-- Step 1 -->
+                            <div class="det-step completed" id="detStep1">
+                                <div class="det-step-bubble"><i class="fas fa-check" style="font-size: 0.68rem;"></i></div>
+                                <div class="det-step-name">Requested</div>
+                                <div class="det-step-time" id="detStepTime1">—</div>
+                            </div>
+                            <!-- Step 2 -->
+                            <div class="det-step" id="detStep2">
+                                <div class="det-step-bubble" id="detStepBubble2">2</div>
+                                <div class="det-step-name">Book Handover</div>
+                                <div class="det-step-time" id="detStepTime2">Pending</div>
+                            </div>
+                            <!-- Step 3 -->
+                            <div class="det-step" id="detStep3">
+                                <div class="det-step-bubble" id="detStepBubble3">3</div>
+                                <div class="det-step-name">Inspection & Settlement</div>
+                                <div class="det-step-time" id="detStepTime3">Pending</div>
+                            </div>
+                        </div>
+                    </div>
 
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <p class="mb-2">
-                                        <strong>Return Request #:</strong>
-                                        <span id="return_request_id"></span>
-                                    </p>
+                    <!-- Contextual Status Tip Banner -->
+                    <div id="status_tip_banner" class="alert py-2 px-3 mb-3 d-flex align-items-center gap-2" style="font-size: 0.78rem; border-radius: 8px;">
+                        <i id="status_tip_icon" class="fas fa-info-circle"></i>
+                        <span id="status_tip_text"></span>
+                    </div>
 
-                                    <p class="mb-2">
-                                        <strong>Return Method:</strong>
-                                        <span id="return_method"></span>
-                                    </p>
-
-                                    <p class="mb-2">
-                                        <strong>Request Date:</strong>
-                                        <span id="return_request_date"></span>
-                                    </p>
-
-                                    <p class="mb-2" id="return_received_date_container" style="display: none;">
-                                        <strong>Received Date:</strong>
-                                        <span id="return_received_date"></span>
-                                    </p>
-
-                                    <p class="mb-2" id="return_completed_date_container" style="display: none;">
-                                        <strong>Completed Date:</strong>
-                                        <span id="return_completed_date"></span>
-                                    </p>
+                    <!-- Book Information Card -->
+                    <div class="det-card-section">
+                        <div class="det-sec-label">Book Information</div>
+                        <div class="d-flex align-items-start gap-3">
+                            <img src="" id="return_book_image" alt="Book Cover" style="width: 52px; height: 72px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1; flex-shrink: 0;" onerror="this.src='img/default-book-cover.jpg'">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="fw-bold text-truncate" id="return_book_title" style="font-size: 0.92rem; color: #0f172a;"></div>
+                                <div class="text-muted mb-2" id="return_book_author" style="font-size: 0.78rem;"></div>
+                                <div class="d-flex flex-wrap gap-2" style="font-size: 0.75rem;">
+                                    <span class="badge bg-light text-dark border">ISBN: <strong id="return_isbn">—</strong></span>
+                                    <span class="badge bg-light text-dark border">Period: <strong id="return_weeks">—</strong></span>
+                                    <span class="badge bg-light text-dark border">Rental Fee: ₱<strong id="return_total_fee">0.00</strong></span>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Return Details Section -->
-                    <div class="card mb-3" id="return_method_details_card">
-                        <div class="card-header">
-                            <h5 class="mb-0">Return Method Details</h5>
+                    <!-- Handover Destination & Return Method Card -->
+                    <div class="det-card-section">
+                        <div class="det-sec-label">
+                            <span>Handover & Return Method</span>
+                            <span id="return_method_badge" class="badge bg-light text-dark border"></span>
                         </div>
-                        <div class="card-body">
-                            <div id="return_method_details">
-                                <!-- Return method details will be populated by JavaScript -->
+                        <div id="return_method_content" style="line-height: 1.5;">
+                            <!-- Injected by JavaScript -->
+                        </div>
+
+                        <!-- Highlighted Meet-up Note Box -->
+                        <div id="return_notes_wrap" class="det-meetup-box mt-2" style="display: none;">
+                            <div class="d-flex align-items-center justify-content-between mb-1">
+                                <span class="fw-bold text-uppercase" style="font-size: 0.72rem; color: #b45309; letter-spacing: 0.5px;">
+                                    <i class="fas fa-comment-alt me-1"></i> Meet-up / Handover Instructions
+                                </span>
+                                <span class="badge bg-white text-dark border" style="font-size: 0.68rem;">Handover Note</span>
                             </div>
+                            <div class="fw-semibold text-dark" style="font-size: 0.83rem;" id="return_notes_text"></div>
                         </div>
                     </div>
 
-                    <!-- Condition Assessment Section (shown only when available) -->
-                    <div class="card mb-3" id="condition_assessment_card" style="display: none;">
-                        <div class="card-header">
-                            <h5 class="mb-0">Condition Assessment</h5>
+                    <!-- Book Owner / Seller Contact Card -->
+                    <div class="det-card-section">
+                        <div class="det-sec-label">
+                            <span>Book Owner / Seller Details</span>
+                            <span class="badge bg-light text-muted border" style="font-size: 0.68rem;">Rented From</span>
                         </div>
-                        <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <p class="mb-2">
-                                        <strong>Book Condition:</strong>
-                                        <span id="book_condition_badge" class="badge rounded-pill"></span>
-                                    </p>
-
-                                    <p class="mb-2" id="damage_description_container" style="display: none;">
-                                        <strong>Damage Description:</strong>
-                                        <span id="damage_description"></span>
-                                    </p>
-
-                                    <p class="mb-2" id="notes_container" style="display: none;">
-                                        <strong>Notes:</strong>
-                                        <span id="assessment_notes"></span>
-                                    </p>
+                        <div class="row g-2">
+                            <div class="col-sm-5">
+                                <div class="text-muted" style="font-size: 0.72rem;">Owner / Shop</div>
+                                <div class="fw-semibold text-dark text-truncate" id="seller_name">Book Owner</div>
+                                <div class="text-muted text-truncate" id="seller_shop_name" style="font-size: 0.72rem; display: none;"></div>
+                            </div>
+                            <div class="col-sm-4">
+                                <div class="text-muted" style="font-size: 0.72rem;">Email</div>
+                                <div class="text-truncate">
+                                    <a href="#" id="seller_email" class="text-decoration-none text-dark fw-semibold" style="font-size: 0.78rem;">—</a>
                                 </div>
-
-                                <div class="col-md-6">
-                                    <div id="is_overdue_container" style="display: none;">
-                                        <p class="mb-2">
-                                            <strong>Overdue Status:</strong>
-                                            <span id="is_overdue_badge" class="badge rounded-pill"></span>
-                                        </p>
-
-                                        <p class="mb-2">
-                                            <strong>Days Overdue:</strong>
-                                            <span id="days_overdue"></span>
-                                        </p>
-                                    </div>
+                            </div>
+                            <div class="col-sm-3">
+                                <div class="text-muted" style="font-size: 0.72rem;">Phone</div>
+                                <div class="text-truncate">
+                                    <a href="#" id="seller_phone" class="text-decoration-none text-dark fw-semibold" style="font-size: 0.78rem;">—</a>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Fees Section (shown only when there are fees) -->
-                    <div class="card" id="fees_card" style="display: none;">
-                        <div class="card-header">
-                            <h5 class="mb-0">Additional Fees</h5>
+                    <!-- Condition Assessment & Fee Settlement Section (Shown when completed or assessed) -->
+                    <div id="condition_assessment_card" class="det-card-section" style="display: none;">
+                        <div class="det-sec-label">
+                            <span>Condition Assessment & Settlement</span>
+                            <span id="return_condition_badge" class="badge"></span>
                         </div>
-                        <div class="card-body">
-                            <div class="table-responsive">
-                                <table class="table table-sm">
-                                    <tbody>
-                                        <tr id="late_fee_row" style="display: none;">
-                                            <td><strong>Late Fee:</strong></td>
-                                            <td class="text-end" id="late_fee"></td>
-                                        </tr>
-                                        <tr id="damage_fee_row" style="display: none;">
-                                            <td><strong>Damage Fee:</strong></td>
-                                            <td class="text-end" id="damage_fee"></td>
-                                        </tr>
-                                        <tr id="additional_fee_row" style="display: none;">
-                                            <td><strong>Additional Fee:</strong></td>
-                                            <td class="text-end" id="additional_fee"></td>
-                                        </tr>
-                                        <tr id="total_fee_row" style="display: none;">
-                                            <td><strong>Total Additional Fees:</strong></td>
-                                            <td class="text-end fw-bold" id="total_fees"></td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+
+                        <!-- Overdue Banner if overdue -->
+                        <div id="overdue_alert_banner" class="alert alert-warning py-1 px-2 mb-2 d-flex align-items-center justify-content-between" style="font-size: 0.75rem; display: none;">
+                            <span><i class="fas fa-exclamation-triangle text-warning me-1"></i> Returned Past Rental Due Date</span>
+                            <span class="badge bg-danger text-white" id="overdue_days_text"></span>
+                        </div>
+
+                        <!-- Fee Grid -->
+                        <div class="det-fee-grid text-center mb-2">
+                            <div>
+                                <div class="text-muted" style="font-size: 0.7rem;">Condition</div>
+                                <div class="fw-bold text-dark" id="disp_condition">—</div>
+                            </div>
+                            <div>
+                                <div class="text-muted" style="font-size: 0.7rem;">Damage Fee</div>
+                                <div class="fw-bold" id="disp_damage_fee">₱0.00</div>
+                            </div>
+                            <div>
+                                <div class="text-muted" style="font-size: 0.7rem;">Late Fee</div>
+                                <div class="fw-bold" id="disp_late_fee">₱0.00</div>
+                            </div>
+                            <div>
+                                <div class="text-muted" style="font-size: 0.7rem;">Additional</div>
+                                <div class="fw-bold" id="disp_add_fee">₱0.00</div>
                             </div>
                         </div>
+
+                        <!-- Total Fees Highlight if > 0 -->
+                        <div id="total_fees_highlight" class="d-flex justify-content-between align-items-center p-2 rounded mb-2 border" style="background: #fef2f2; border-color: #fecaca !important; display: none;">
+                            <span class="fw-semibold text-danger" style="font-size: 0.8rem;">Total Additional Charges:</span>
+                            <span class="fw-bold text-danger" style="font-size: 0.95rem;" id="disp_total_fees">₱0.00</span>
+                        </div>
+
+                        <!-- Damage description and/or Seller Notes -->
+                        <div id="assessment_notes_wrap" class="p-2 border rounded" style="background: #ffffff; display: none;">
+                            <div class="text-muted fw-semibold mb-1" style="font-size: 0.7rem; text-transform: uppercase;">
+                                <i class="fas fa-clipboard-check me-1"></i> Owner Inspection Remarks
+                            </div>
+                            <div class="text-dark" id="assessment_notes_text" style="font-size: 0.78rem;"></div>
+                        </div>
                     </div>
+
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+
+                <div class="modal-footer px-4 py-2" style="background: #fafbfc; border-top: 1px solid #f1f5f9;">
+                    <button type="button" class="btn btn-light btn-sm border px-3" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
@@ -715,247 +954,342 @@ $activeTab = $_GET['tab'] ?? 'all';
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            // Function to parse return details
+            // Function to safely parse JSON or return string
             function parseReturnDetails(detailsJson) {
+                if (!detailsJson) return {};
+                if (typeof detailsJson === 'object') return detailsJson;
                 try {
                     return JSON.parse(detailsJson);
                 } catch (e) {
-                    // If not valid JSON, try to parse as a string
                     try {
                         const detailsStr = detailsJson.replace(/\\"/g, '"');
                         return JSON.parse(detailsStr);
                     } catch (e2) {
-                        // If all else fails, return as is
                         return detailsJson;
                     }
+                }
+            }
+
+            function formatShortDate(dtStr) {
+                if (!dtStr) return '—';
+                try {
+                    const d = new Date(dtStr.replace(' ', 'T'));
+                    if (isNaN(d.getTime())) return dtStr.split(' ')[0] || dtStr;
+                    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                } catch (e) {
+                    return dtStr;
                 }
             }
 
             // Add click event to return details buttons
             document.querySelectorAll('.return-details-btn').forEach(function (button) {
                 button.addEventListener('click', function () {
-                    // Get data from button attributes
-                    const returnId = this.getAttribute('data-return-id');
-                    const bookTitle = this.getAttribute('data-book-title');
-                    const bookAuthor = this.getAttribute('data-book-author');
-                    const coverImage = this.getAttribute('data-cover-image');
-                    const status = this.getAttribute('data-status');
-                    const method = this.getAttribute('data-method');
-                    const details = this.getAttribute('data-details');
-                    const requestDate = this.getAttribute('data-request-date');
-                    const receivedDate = this.getAttribute('data-received-date');
-                    const completedDate = this.getAttribute('data-completed-date');
-                    const condition = this.getAttribute('data-condition');
-                    const damage = this.getAttribute('data-damage');
+                    const returnId = this.getAttribute('data-return-id') || '';
+                    const rentalId = this.getAttribute('data-rental-id') || '—';
+                    const bookTitle = this.getAttribute('data-book-title') || '';
+                    const bookAuthor = this.getAttribute('data-book-author') || '';
+                    const coverImage = this.getAttribute('data-cover-image') || 'img/default-book-cover.jpg';
+                    const isbn = this.getAttribute('data-isbn') || '—';
+                    const rentalWeeks = this.getAttribute('data-rental-weeks') || '1';
+                    const rentalPrice = this.getAttribute('data-rental-price') || '0.00';
+                    const sellerName = this.getAttribute('data-seller-name') || 'Book Owner';
+                    const sellerShop = this.getAttribute('data-seller-shop') || '';
+                    const sellerEmail = this.getAttribute('data-seller-email') || '';
+                    const sellerPhone = this.getAttribute('data-seller-phone') || '';
+                    const status = (this.getAttribute('data-status') || 'pending').toLowerCase();
+                    const method = (this.getAttribute('data-method') || 'dropoff').toLowerCase();
+                    const details = this.getAttribute('data-details') || '';
+                    const requestDate = this.getAttribute('data-request-date') || '';
+                    const receivedDate = this.getAttribute('data-received-date') || '';
+                    const completedDate = this.getAttribute('data-completed-date') || '';
+                    const condition = (this.getAttribute('data-condition') || '').toLowerCase();
+                    const damage = this.getAttribute('data-damage') || '';
                     const lateFee = parseFloat(this.getAttribute('data-late-fee') || 0);
                     const damageFee = parseFloat(this.getAttribute('data-damage-fee') || 0);
                     const additionalFee = parseFloat(this.getAttribute('data-additional-fee') || 0);
-                    const isOverdue = this.getAttribute('data-is-overdue') === '1';
-                    const daysOverdue = parseInt(this.getAttribute('data-days-overdue') || 0);
-                    const notes = this.getAttribute('data-notes');
+                    const isOverdue = this.getAttribute('data-is-overdue') === '1' || this.getAttribute('data-is-overdue') === 'true';
+                    const daysOverdue = parseInt(this.getAttribute('data-days-overdue') || 0, 10);
+                    const notes = this.getAttribute('data-notes') || '';
 
-                    // Parse return details
                     const parsedDetails = parseReturnDetails(details);
 
-                    // Populate basic info
-                    document.getElementById('return_book_title').textContent = bookTitle;
-                    document.getElementById('return_book_author').textContent = 'by ' + bookAuthor;
-                    document.getElementById('return_book_image').src = coverImage;
+                    // Populate header & book info
                     document.getElementById('return_request_id').textContent = returnId;
-                    document.getElementById('return_method').textContent = method.charAt(0).toUpperCase() + method.slice(1);
-                    document.getElementById('return_request_date').textContent = new Date(requestDate).toLocaleDateString('en-US', {
-                        year: 'numeric', month: 'long', day: 'numeric'
-                    });
+                    document.getElementById('return_rental_id').textContent = rentalId;
+                    document.getElementById('return_request_date').textContent = requestDate ? `Requested on ${formatShortDate(requestDate)}` : '';
+                    document.getElementById('return_book_title').textContent = bookTitle;
+                    document.getElementById('return_book_author').textContent = bookAuthor ? `by ${bookAuthor}` : '';
+                    document.getElementById('return_book_image').src = coverImage;
+                    document.getElementById('return_isbn').textContent = isbn;
+                    document.getElementById('return_weeks').textContent = `${rentalWeeks} wk${parseInt(rentalWeeks, 10) > 1 ? 's' : ''}`;
+                    document.getElementById('return_total_fee').textContent = rentalPrice;
 
-                    // Set status badge
+                    // 3-Step Stepper logic & Status Badge & Tip Banner
+                    const fillBar = document.getElementById('detStepperFill');
+                    const step1 = document.getElementById('detStep1');
+                    const step2 = document.getElementById('detStep2');
+                    const step3 = document.getElementById('detStep3');
+                    const bubble2 = document.getElementById('detStepBubble2');
+                    const bubble3 = document.getElementById('detStepBubble3');
+                    const stepTime1 = document.getElementById('detStepTime1');
+                    const stepTime2 = document.getElementById('detStepTime2');
+                    const stepTime3 = document.getElementById('detStepTime3');
+
                     const statusBadge = document.getElementById('return_status_badge');
-                    statusBadge.textContent = status.charAt(0).toUpperCase() + status.replace('_', ' ').slice(1);
-                    statusBadge.className = 'status-badge';
+                    const tipBanner = document.getElementById('status_tip_banner');
+                    const tipIcon = document.getElementById('status_tip_icon');
+                    const tipText = document.getElementById('status_tip_text');
 
-                    switch (status) {
-                        case 'pending':
-                            statusBadge.classList.add('status-pending');
-                            break;
-                        case 'in_transit':
-                        case 'received':
-                        case 'inspected':
-                            statusBadge.classList.add('status-in-transit');
-                            break;
-                        case 'completed':
-                            statusBadge.classList.add('status-completed');
-                            break;
-                        case 'cancelled':
-                            statusBadge.classList.add('status-cancelled');
-                            break;
-                        default:
-                            statusBadge.classList.add('status-pending');
-                    }
+                    stepTime1.textContent = formatShortDate(requestDate);
 
-                    // Show/hide received date
-                    const receivedDateContainer = document.getElementById('return_received_date_container');
-                    if (receivedDate) {
-                        receivedDateContainer.style.display = 'block';
-                        document.getElementById('return_received_date').textContent = new Date(receivedDate).toLocaleDateString('en-US', {
-                            year: 'numeric', month: 'long', day: 'numeric'
-                        });
+                    if (status === 'pending') {
+                        fillBar.style.width = '20%';
+                        step1.className = 'det-step completed';
+                        step2.className = 'det-step active';
+                        step3.className = 'det-step';
+                        bubble2.textContent = '2';
+                        bubble3.textContent = '3';
+                        stepTime2.textContent = 'Pending Handover';
+                        stepTime3.textContent = 'Pending Inspection';
+
+                        statusBadge.className = 'badge-clean badge-pending';
+                        statusBadge.innerHTML = '<i class="fas fa-clock"></i> Pending Handover';
+
+                        tipBanner.className = 'alert alert-warning py-2 px-3 mb-3 d-flex align-items-center gap-2';
+                        tipIcon.className = 'fas fa-info-circle text-warning';
+                        tipText.textContent = 'Handover in progress: Please bring the book to the agreed location. Once received by the owner, they will inspect and complete the return.';
+                    } else if (status === 'received' || status === 'in_transit') {
+                        fillBar.style.width = '60%';
+                        step1.className = 'det-step completed';
+                        step2.className = 'det-step completed';
+                        step3.className = 'det-step active';
+                        bubble2.innerHTML = '<i class="fas fa-check" style="font-size: 0.68rem;"></i>';
+                        bubble3.textContent = '3';
+                        stepTime2.textContent = formatShortDate(receivedDate) || 'Received';
+                        stepTime3.textContent = 'Inspecting Condition';
+
+                        statusBadge.className = 'badge-clean badge-in-transit';
+                        statusBadge.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Received & Inspecting';
+
+                        tipBanner.className = 'alert alert-info py-2 px-3 mb-3 d-flex align-items-center gap-2';
+                        tipIcon.className = 'fas fa-info-circle text-primary';
+                        tipText.textContent = 'Book received: The owner has confirmed physical receipt of the book and is currently performing condition inspection.';
+                    } else if (status === 'completed') {
+                        fillBar.style.width = '100%';
+                        step1.className = 'det-step completed';
+                        step2.className = 'det-step completed';
+                        step3.className = 'det-step completed';
+                        bubble2.innerHTML = '<i class="fas fa-check" style="font-size: 0.68rem;"></i>';
+                        bubble3.innerHTML = '<i class="fas fa-check" style="font-size: 0.68rem;"></i>';
+                        stepTime2.textContent = formatShortDate(receivedDate) || 'Received';
+                        stepTime3.textContent = formatShortDate(completedDate) || 'Completed';
+
+                        statusBadge.className = 'badge-clean badge-completed';
+                        statusBadge.innerHTML = '<i class="fas fa-check-circle"></i> Return Completed';
+
+                        tipBanner.className = 'alert alert-success py-2 px-3 mb-3 d-flex align-items-center gap-2';
+                        tipIcon.className = 'fas fa-check-circle text-success';
+                        tipText.textContent = 'Return completed: The book condition has been assessed and this rental cycle is successfully finalized.';
+                    } else if (status === 'cancelled') {
+                        fillBar.style.width = '0%';
+                        step1.className = 'det-step';
+                        step2.className = 'det-step';
+                        step3.className = 'det-step';
+                        stepTime2.textContent = 'Cancelled';
+                        stepTime3.textContent = 'Cancelled';
+
+                        statusBadge.className = 'badge-clean badge-cancelled';
+                        statusBadge.innerHTML = '<i class="fas fa-times-circle"></i> Cancelled';
+
+                        tipBanner.className = 'alert alert-danger py-2 px-3 mb-3 d-flex align-items-center gap-2';
+                        tipIcon.className = 'fas fa-times-circle text-danger';
+                        tipText.textContent = 'This return request was cancelled.';
                     } else {
-                        receivedDateContainer.style.display = 'none';
+                        fillBar.style.width = '20%';
+                        statusBadge.className = 'badge-clean badge-neutral';
+                        statusBadge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                        tipBanner.className = 'alert alert-secondary py-2 px-3 mb-3 d-flex align-items-center gap-2';
+                        tipText.textContent = 'Return request status: ' + status;
                     }
 
-                    // Show/hide completed date
-                    const completedDateContainer = document.getElementById('return_completed_date_container');
-                    if (completedDate) {
-                        completedDateContainer.style.display = 'block';
-                        document.getElementById('return_completed_date').textContent = new Date(completedDate).toLocaleDateString('en-US', {
-                            year: 'numeric', month: 'long', day: 'numeric'
-                        });
-                    } else {
-                        completedDateContainer.style.display = 'none';
-                    }
+                    // Return Method details
+                    const methodBadge = document.getElementById('return_method_badge');
+                    const methodContent = document.getElementById('return_method_content');
+                    const notesWrap = document.getElementById('return_notes_wrap');
+                    const notesText = document.getElementById('return_notes_text');
 
-                    // Handle return method details
-                    const methodDetails = document.getElementById('return_method_details');
                     if (method === 'dropoff') {
-                        let dropoffLocation = '';
-
-                        if (typeof parsedDetails === 'object' && parsedDetails.dropoff_location) {
-                            dropoffLocation = parsedDetails.dropoff_location;
-                        } else if (typeof parsedDetails === 'string' && parsedDetails.includes('dropoff_location')) {
-                            // Try to extract location from string
-                            dropoffLocation = parsedDetails;
-                        } else {
-                            dropoffLocation = parsedDetails;
+                        let dropLoc = '';
+                        let dropNote = '';
+                        if (typeof parsedDetails === 'object' && parsedDetails) {
+                            dropLoc = parsedDetails.dropoff_location || '';
+                            dropNote = parsedDetails.dropoff_notes || '';
+                        } else if (typeof parsedDetails === 'string') {
+                            dropLoc = parsedDetails;
                         }
 
-                        methodDetails.innerHTML = `
-                        <p><strong>Drop-off Location:</strong></p>
-                        <p>${dropoffLocation}</p>
-                    `;
-                    } else if (method === 'pickup') {
-                        let pickupDetails = '';
+                        const isCampus = dropLoc.toLowerCase().includes('campus');
+                        methodBadge.textContent = isCampus ? 'Campus Meet-up' : 'Drop-off';
+                        methodBadge.className = isCampus 
+                            ? 'badge bg-primary-subtle text-primary border border-primary-subtle' 
+                            : 'badge bg-light text-dark border';
 
-                        if (typeof parsedDetails === 'object') {
-                            // Format structured data
-                            pickupDetails = `
-                            <p><strong>Address:</strong> ${parsedDetails.pickup_address || 'N/A'}</p>
-                            <p><strong>Date:</strong> ${parsedDetails.pickup_date || 'N/A'}</p>
-                            <p><strong>Time Slot:</strong> ${parsedDetails.pickup_time || 'N/A'}</p>
+                        methodContent.innerHTML = `
+                            <div class="d-flex align-items-start gap-2">
+                                <i class="fas fa-map-marker-alt text-danger mt-1"></i>
+                                <div>
+                                    <span class="text-muted" style="font-size: 0.74rem;">Designated Location:</span>
+                                    <div class="fw-semibold text-dark">${dropLoc || 'Campus Meet-up / Drop-off Point'}</div>
+                                </div>
+                            </div>
                         `;
 
-                            if (parsedDetails.pickup_notes) {
-                                pickupDetails += `<p><strong>Notes:</strong> ${parsedDetails.pickup_notes}</p>`;
-                            }
+                        if (dropNote && dropNote.trim().length > 0) {
+                            notesWrap.style.display = 'block';
+                            notesText.textContent = dropNote;
                         } else {
-                            // Show raw data if parsing failed
-                            pickupDetails = `<p>${parsedDetails}</p>`;
+                            notesWrap.style.display = 'none';
+                        }
+                    } else if (method === 'pickup') {
+                        methodBadge.textContent = 'Courier Pickup';
+                        methodBadge.className = 'badge bg-info-subtle text-info-emphasis border border-info-subtle';
+
+                        let pAddr = 'N/A';
+                        let pDate = '';
+                        let pTime = '';
+                        let pNotes = '';
+
+                        if (typeof parsedDetails === 'object' && parsedDetails) {
+                            pAddr = parsedDetails.pickup_address || 'N/A';
+                            pDate = parsedDetails.pickup_date || '';
+                            pTime = parsedDetails.pickup_time || '';
+                            pNotes = parsedDetails.pickup_notes || '';
                         }
 
-                        methodDetails.innerHTML = pickupDetails;
-                    } else {
-                        methodDetails.innerHTML = '<p>No details available</p>';
-                    }
+                        methodContent.innerHTML = `
+                            <div class="d-flex align-items-start gap-2 mb-1">
+                                <i class="fas fa-truck text-primary mt-1"></i>
+                                <div>
+                                    <span class="text-muted" style="font-size: 0.74rem;">Pickup Address:</span>
+                                    <div class="fw-semibold text-dark">${pAddr}</div>
+                                </div>
+                            </div>
+                            ${pDate || pTime ? `
+                            <div class="d-flex align-items-center gap-2 text-muted mt-1" style="font-size: 0.76rem;">
+                                <i class="far fa-calendar-alt"></i>
+                                <span>Scheduled: <strong class="text-dark">${pDate || 'Pending'}</strong> ${pTime ? `· ${pTime}` : ''}</span>
+                            </div>` : ''}
+                        `;
 
-                    // Handle condition assessment
-                    const conditionCard = document.getElementById('condition_assessment_card');
-
-                    if (condition) {
-                        conditionCard.style.display = 'block';
-
-                        // Set condition badge
-                        const conditionBadge = document.getElementById('book_condition_badge');
-                        conditionBadge.textContent = condition.charAt(0).toUpperCase() + condition.slice(1);
-                        conditionBadge.className = 'badge rounded-pill';
-
-                        switch (condition) {
-                            case 'excellent':
-                            case 'good':
-                                conditionBadge.classList.add('bg-success');
-                                break;
-                            case 'fair':
-                                conditionBadge.classList.add('bg-warning');
-                                break;
-                            case 'damaged':
-                                conditionBadge.classList.add('bg-danger');
-                                break;
-                            default:
-                                conditionBadge.classList.add('bg-secondary');
-                        }
-
-                        // Show/hide damage description
-                        const damageContainer = document.getElementById('damage_description_container');
-                        if (damage) {
-                            damageContainer.style.display = 'block';
-                            document.getElementById('damage_description').textContent = damage;
+                        if (pNotes && pNotes.trim().length > 0) {
+                            notesWrap.style.display = 'block';
+                            notesText.textContent = pNotes;
                         } else {
-                            damageContainer.style.display = 'none';
-                        }
-
-                        // Show/hide assessment notes
-                        const notesContainer = document.getElementById('notes_container');
-                        if (notes) {
-                            notesContainer.style.display = 'block';
-                            document.getElementById('assessment_notes').textContent = notes;
-                        } else {
-                            notesContainer.style.display = 'none';
-                        }
-
-                        // Show/hide overdue information
-                        const overdueContainer = document.getElementById('is_overdue_container');
-                        if (isOverdue) {
-                            overdueContainer.style.display = 'block';
-
-                            const overdueBadge = document.getElementById('is_overdue_badge');
-                            overdueBadge.textContent = 'Overdue';
-                            overdueBadge.className = 'badge rounded-pill bg-danger';
-
-                            document.getElementById('days_overdue').textContent = daysOverdue + ' day' + (daysOverdue !== 1 ? 's' : '');
-                        } else {
-                            overdueContainer.style.display = 'none';
+                            notesWrap.style.display = 'none';
                         }
                     } else {
-                        conditionCard.style.display = 'none';
+                        methodBadge.textContent = method.charAt(0).toUpperCase() + method.slice(1);
+                        methodBadge.className = 'badge bg-light text-dark border';
+                        methodContent.innerHTML = `<div class="text-muted">Standard return handover</div>`;
+                        notesWrap.style.display = 'none';
                     }
 
-                    // Handle fees
-                    const feesCard = document.getElementById('fees_card');
+                    // Book Owner / Seller Contact Info
+                    document.getElementById('seller_name').textContent = sellerName;
+                    const sShopEl = document.getElementById('seller_shop_name');
+                    if (sellerShop && sellerShop.trim().length > 0 && sellerShop.toLowerCase() !== sellerName.toLowerCase()) {
+                        sShopEl.textContent = 'Store: ' + sellerShop;
+                        sShopEl.style.display = 'block';
+                    } else {
+                        sShopEl.style.display = 'none';
+                    }
+                    
+                    const sEmailLink = document.getElementById('seller_email');
+                    if (sellerEmail && sellerEmail.trim().length > 0) {
+                        sEmailLink.textContent = sellerEmail;
+                        sEmailLink.href = 'mailto:' + sellerEmail;
+                        sEmailLink.className = 'text-decoration-none text-primary fw-semibold';
+                    } else {
+                        sEmailLink.textContent = 'Not provided';
+                        sEmailLink.removeAttribute('href');
+                        sEmailLink.className = 'text-decoration-none text-muted';
+                    }
+
+                    const sPhoneLink = document.getElementById('seller_phone');
+                    if (sellerPhone && sellerPhone.trim().length > 0 && sellerPhone !== '—') {
+                        sPhoneLink.textContent = sellerPhone;
+                        sPhoneLink.href = 'tel:' + sellerPhone;
+                        sPhoneLink.className = 'text-decoration-none text-primary fw-semibold';
+                    } else {
+                        sPhoneLink.textContent = 'Not provided';
+                        sPhoneLink.removeAttribute('href');
+                        sPhoneLink.className = 'text-decoration-none text-muted';
+                    }
+
+                    // Condition Assessment & Fee Settlement Card
+                    const condCard = document.getElementById('condition_assessment_card');
                     const totalFees = lateFee + damageFee + additionalFee;
 
-                    if (totalFees > 0) {
-                        feesCard.style.display = 'block';
+                    if (status === 'completed' || condition || totalFees > 0 || isOverdue) {
+                        condCard.style.display = 'block';
 
-                        // Late fee
-                        const lateFeeRow = document.getElementById('late_fee_row');
-                        if (lateFee > 0) {
-                            lateFeeRow.style.display = 'table-row';
-                            document.getElementById('late_fee').textContent = '₱' + lateFee.toFixed(2);
+                        // Condition badge
+                        const condBadge = document.getElementById('return_condition_badge');
+                        if (condition) {
+                            condBadge.textContent = condition.charAt(0).toUpperCase() + condition.slice(1);
+                            if (condition === 'excellent') condBadge.className = 'badge bg-success';
+                            else if (condition === 'good') condBadge.className = 'badge bg-success-subtle text-success border border-success-subtle';
+                            else if (condition === 'fair') condBadge.className = 'badge bg-warning-subtle text-warning-emphasis border border-warning-subtle';
+                            else if (condition === 'damaged') condBadge.className = 'badge bg-danger';
+                            else condBadge.className = 'badge bg-secondary';
+                            document.getElementById('disp_condition').textContent = condition.charAt(0).toUpperCase() + condition.slice(1);
                         } else {
-                            lateFeeRow.style.display = 'none';
+                            condBadge.textContent = 'Assessed';
+                            condBadge.className = 'badge bg-light text-dark border';
+                            document.getElementById('disp_condition').textContent = 'Completed';
                         }
 
-                        // Damage fee
-                        const damageFeeRow = document.getElementById('damage_fee_row');
-                        if (damageFee > 0) {
-                            damageFeeRow.style.display = 'table-row';
-                            document.getElementById('damage_fee').textContent = '₱' + damageFee.toFixed(2);
+                        // Overdue status
+                        const overdueBanner = document.getElementById('overdue_alert_banner');
+                        if (isOverdue || daysOverdue > 0) {
+                            overdueBanner.style.display = 'flex';
+                            document.getElementById('overdue_days_text').textContent = `${daysOverdue} day${daysOverdue !== 1 ? 's' : ''} overdue`;
                         } else {
-                            damageFeeRow.style.display = 'none';
+                            overdueBanner.style.display = 'none';
                         }
 
-                        // Additional fee
-                        const additionalFeeRow = document.getElementById('additional_fee_row');
-                        if (additionalFee > 0) {
-                            additionalFeeRow.style.display = 'table-row';
-                            document.getElementById('additional_fee').textContent = '₱' + additionalFee.toFixed(2);
+                        // Fee values
+                        const damEl = document.getElementById('disp_damage_fee');
+                        damEl.textContent = '₱' + damageFee.toFixed(2);
+                        damEl.className = damageFee > 0 ? 'fw-bold text-danger' : 'fw-bold text-muted';
+
+                        const lateEl = document.getElementById('disp_late_fee');
+                        lateEl.textContent = '₱' + lateFee.toFixed(2);
+                        lateEl.className = lateFee > 0 ? 'fw-bold text-danger' : 'fw-bold text-muted';
+
+                        const addEl = document.getElementById('disp_add_fee');
+                        addEl.textContent = '₱' + additionalFee.toFixed(2);
+                        addEl.className = additionalFee > 0 ? 'fw-bold text-danger' : 'fw-bold text-muted';
+
+                        const totalHighlight = document.getElementById('total_fees_highlight');
+                        if (totalFees > 0) {
+                            totalHighlight.style.display = 'flex';
+                            document.getElementById('disp_total_fees').textContent = '₱' + totalFees.toFixed(2);
                         } else {
-                            additionalFeeRow.style.display = 'none';
+                            totalHighlight.style.display = 'none';
                         }
 
-                        // Total fees
-                        const totalFeeRow = document.getElementById('total_fee_row');
-                        totalFeeRow.style.display = 'table-row';
-                        document.getElementById('total_fees').textContent = '₱' + totalFees.toFixed(2);
+                        // Remarks
+                        const notesWrap2 = document.getElementById('assessment_notes_wrap');
+                        const remarks = [damage, notes].filter(Boolean).join(' · ');
+                        if (remarks && remarks.trim().length > 0) {
+                            notesWrap2.style.display = 'block';
+                            document.getElementById('assessment_notes_text').textContent = remarks;
+                        } else {
+                            notesWrap2.style.display = 'none';
+                        }
                     } else {
-                        feesCard.style.display = 'none';
+                        condCard.style.display = 'none';
                     }
                 });
             });

@@ -1,0 +1,172 @@
+Table roles {
+  id integer [pk]
+  role_name varchar(50) [unique]
+  description varchar(255)
+  permissions text
+}
+
+Table users {
+  id integer [pk]
+  role_id integer
+  username varchar(50) [unique]
+  email varchar(255) [unique]
+  password varchar(255)
+  firstname varchar(50)
+  lastname varchar(50)
+  usertype varchar(20)
+  status varchar(20)
+  is_2fa_enabled tinyint
+  google2fa_secret varchar(64)
+  failed_attempts integer
+  lockout_until datetime
+  login_count integer
+  created_at datetime
+  updated_at datetime
+}
+
+Table audit_logs {
+  id integer [pk]
+  user_id integer
+  activity varchar(100)
+  details text
+  ip_address varchar(45)
+  user_agent varchar(255)
+  created_at datetime
+}
+
+Table sellers {
+  id integer [pk]
+  user_id integer [unique]
+  shop_name varchar(100)
+  first_name varchar(100)
+  last_name varchar(100)
+  phone_number varchar(20)
+  status varchar(20)
+  created_at datetime
+}
+
+Table books {
+  id integer [pk]
+  user_id integer
+  title varchar(255)
+  author varchar(255)
+  isbn varchar(20)
+  genre varchar(100)
+  price decimal(10,2)
+  rental_price decimal(10,2)
+  rental_period integer
+  quantity integer
+  book_condition varchar(20)
+  status varchar(20)
+  created_at datetime
+}
+
+Table book_images {
+  id integer [pk]
+  book_id integer
+  image_url varchar(255)
+  is_cover tinyint
+  created_at datetime
+}
+
+Table cart {
+  id integer [pk]
+  user_id integer
+  book_id integer
+  quantity integer
+  rental_period integer
+  created_at datetime
+}
+
+Table orders {
+  id integer [pk]
+  user_id integer
+  total_amount decimal(10,2)
+  payment_method varchar(50)
+  status varchar(20)
+  created_at datetime
+}
+
+Table order_items {
+  id integer [pk]
+  order_id integer
+  book_id integer
+  quantity integer
+  price decimal(10,2)
+  purchase_type varchar(10)
+}
+
+Table book_rentals {
+  id integer [pk]
+  order_id integer
+  book_id integer
+  user_id integer
+  seller_id integer
+  rental_weeks integer
+  rental_date datetime
+  due_date datetime
+  return_date datetime
+  total_price decimal(10,2)
+  late_fee decimal(10,2)
+  status varchar(20)
+}
+
+Table book_returns {
+  id integer [pk]
+  rental_id integer
+  user_id integer
+  seller_id integer
+  book_id integer
+  return_method varchar(20)
+  return_details text
+  status varchar(20)
+  request_date datetime
+  received_date datetime
+  completed_date datetime
+  book_condition varchar(20)
+  late_fee decimal(10,2)
+  damage_fee decimal(10,2)
+  additional_fee decimal(10,2)
+}
+
+Table book_swaps {
+  id integer [pk]
+  requester_id integer
+  requested_book_id integer
+  offered_book_id integer
+  status varchar(20)
+  created_at datetime
+}
+
+Table notifications {
+  id integer [pk]
+  user_id integer
+  sender_id integer
+  type varchar(50)
+  content text
+  is_read tinyint
+  created_at datetime
+}
+
+// Relationships & Foreign Keys
+Ref: users.role_id > roles.id
+Ref: audit_logs.user_id > users.id
+Ref: sellers.user_id - users.id
+Ref: books.user_id > users.id
+Ref: book_images.book_id > books.id
+Ref: cart.user_id > users.id
+Ref: cart.book_id > books.id
+Ref: orders.user_id > users.id
+Ref: order_items.order_id > orders.id
+Ref: order_items.book_id > books.id
+Ref: book_rentals.user_id > users.id
+Ref: book_rentals.book_id > books.id
+Ref: book_rentals.seller_id > sellers.id
+Ref: book_returns.rental_id - book_rentals.id
+Ref: book_returns.user_id > users.id
+Ref: book_returns.seller_id > sellers.id
+Ref: book_returns.book_id > books.id
+Ref: book_swaps.requester_id > users.id
+Ref: book_swaps.requested_book_id > books.id
+Ref: book_swaps.offered_book_id > books.id
+Ref: notifications.user_id > users.id

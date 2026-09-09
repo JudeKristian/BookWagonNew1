@@ -20,6 +20,9 @@ if ($conn->connect_error) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BookWagon - Book Listing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/tab.css">
@@ -27,19 +30,21 @@ if ($conn->connect_error) {
     <style>
         :root {
             --primary-color: #f8a100;
+            --primary-dark: #d98800;
             --secondary-color: #f8f9fa;
-            --text-dark: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
+            --text-dark: #1e293b;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
         }
         body {
-            font-family: 'Inter', 'Segoe UI', 'Arial', sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             color: var(--text-dark);
-            background-color: #fff;
+            background-color: #fafbfc;
         }
         .navbar {
             padding: 15px 0;
             border-bottom: 1px solid var(--border-color);
+            background-color: #fff;
         }
         
         .navbar-brand img {
@@ -47,57 +52,133 @@ if ($conn->connect_error) {
         }
         
         .book-card {
-            transition: transform 0.3s;
+            transition: all 0.25s ease;
             height: 100%;
+            border: 1px solid rgba(0,0,0,0.06);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fff;
         }
         .book-card:hover {
             transform: translateY(-5px);
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08) !important;
+            border-color: rgba(248, 161, 0, 0.35);
         }
         .book-img {
             width: 150px;
             height: 220px;
             object-fit: cover;
             display: block;
-            margin: 0 auto; /* Center the image */
+            margin: 0 auto;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
             transition: opacity 0.3s ease-in-out;
         }
         .filter-section {
-            border-right: 1px solid #dee2e6;
-            padding-right: 20px;
+            border-right: 1px solid #edf2f7;
+            padding-right: 24px;
         }
         .filter-group {
-            margin-bottom: 20px;
+            margin-bottom: 24px;
         }
         .filter-title {
-            font-weight: bold;
-            margin-bottom: 10px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #0f172a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 14px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f1f5f9;
+            position: relative;
+        }
+        .filter-title::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 24px;
+            height: 2px;
+            background: var(--primary-color);
+            border-radius: 2px;
+        }
+        .form-check-input {
+            cursor: pointer;
+            border-color: #cbd5e1;
+        }
+        .form-check-input:checked {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+        .form-check-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.2rem rgba(248, 161, 0, 0.22);
+        }
+        .form-check-label {
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #334155;
+            user-select: none;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.2rem rgba(248, 161, 0, 0.2);
         }
         .book-price {
-            font-weight: bold;
-            font-size: 1.2rem;
+            font-weight: 800;
+            font-size: 1.25rem;
+            color: #0f172a;
         }
         .price-per-week {
             font-size: 0.8rem;
-            color: #6c757d;
+            color: var(--text-muted);
         }
         .book-rating i {
-            color: #ffc107;
+            color: #f59e0b;
         }
         .star-gray {
-            color: #e0e0e0 !important;
+            color: #e2e8f0 !important;
         }
         .card-actions {
             position: absolute;
             top: 10px;
             right: 10px;
+            z-index: 5;
         }
         .action-icon {
-            background: rgba(255,255,255,0.8);
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(4px);
             border-radius: 50%;
             padding: 8px;
-            display: inline-block;
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             margin-bottom: 5px;
             cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            transition: transform 0.2s, background 0.2s;
+        }
+        .action-icon:hover {
+            transform: scale(1.1);
+            background: #fff;
+        }
+        .btn-outline-secondary.active {
+            background-color: var(--primary-color) !important;
+            border-color: var(--primary-color) !important;
+            color: #fff !important;
+        }
+        .pagination .page-item.active .page-link {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            color: #fff;
+        }
+        .pagination .page-link {
+            color: #334155;
+        }
+        .pagination .page-link:hover {
+            color: var(--primary-dark);
         }
         .search-container {
             margin-bottom: 20px;
@@ -214,6 +295,23 @@ if ($conn->connect_error) {
         <div class="row">
             <!-- Left sidebar for filters -->
             <div class="col-lg-3 filter-section">
+                <!-- Offer / Listing Type Filter -->
+                <div class="filter-group">
+                    <h5 class="filter-title">Offer Type</h5>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input filter-checkbox" type="checkbox" name="listing_type" id="mode_both" value="both" <?php echo (isset($_GET['listing_type']) && in_array('both', explode(',', $_GET['listing_type']))) ? 'checked' : ''; ?>>
+                        <label class="form-check-label" for="mode_both">Rent & Buy</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input filter-checkbox" type="checkbox" name="listing_type" id="mode_rent" value="rent" <?php echo (isset($_GET['listing_type']) && in_array('rent', explode(',', $_GET['listing_type']))) ? 'checked' : ''; ?>>
+                        <label class="form-check-label" for="mode_rent">For Rent</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input filter-checkbox" type="checkbox" name="listing_type" id="mode_sale" value="sale" <?php echo (isset($_GET['listing_type']) && in_array('sale', explode(',', $_GET['listing_type']))) ? 'checked' : ''; ?>>
+                        <label class="form-check-label" for="mode_sale">For Sale</label>
+                    </div>
+                </div>
+
                 <!-- Price Filter -->
                 <div class="filter-group">
                     <h5 class="filter-title">Price</h5>
@@ -277,13 +375,7 @@ if ($conn->connect_error) {
                 <div class="filter-group">
                     <h5 class="filter-title">Popularity</h5>
                     <?php
-                    // Fetch popularity categories from database
-                    $conn = new mysqli("localhost", "root", "", "bookwagon_db"); // Replace with your actual connection details
-                    
-                    if ($conn->connect_error) {
-                        die("Connection failed: " . $conn->connect_error);
-                    }
-                    
+                    // Fetch popularity categories from database using existing $conn
                     $popularity_query = "SELECT DISTINCT popularity FROM books WHERE popularity IS NOT NULL ORDER BY popularity";
                     $popularity_result = $conn->query($popularity_query);
                     

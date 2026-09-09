@@ -88,6 +88,18 @@ if(isset($_GET['condition']) && $_GET['condition'] != '') {
     }
 }
 
+if(isset($_GET['listing_type']) && $_GET['listing_type'] != '') {
+    $listing_type_values = explode(',', $_GET['listing_type']);
+    if (count($listing_type_values) > 1) {
+        $lt_placeholders = implode(',', array_fill(0, count($listing_type_values), '?'));
+        $where_clauses[] = "listing_type IN ($lt_placeholders)";
+        $params = array_merge($params, $listing_type_values);
+    } else {
+        $where_clauses[] = "listing_type = ?";
+        $params[] = $_GET['listing_type'];
+    }
+}
+
 if(isset($_GET['search']) && $_GET['search'] != '') {
     $where_clauses[] = "(title LIKE ? OR author LIKE ? OR description LIKE ?)";
     $search_term = '%' . $_GET['search'] . '%';
@@ -105,11 +117,6 @@ if(!empty($where_clauses)) {
 }
 
 // Prepare and execute the count query
-$conn = new mysqli("localhost", "root", "", "bookwagon_db"); // Replace with your actual connection details
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
 $stmt = $conn->prepare($count_query);
 if(!empty($params)) {
     $types = str_repeat('s', count($params));

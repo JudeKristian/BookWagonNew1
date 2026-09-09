@@ -33,8 +33,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             exit();
         }
         
-        $dropoffLocation = $_POST['dropoff_location'];
-        $returnDetails = json_encode(['dropoff_location' => $dropoffLocation]);
+        $dropoffLocation = trim($_POST['dropoff_location']);
+        $dropoffNotes = trim($_POST['dropoff_notes'] ?? '');
+        
+        $combinedLocation = $dropoffLocation;
+        if (!empty($dropoffNotes)) {
+            $combinedLocation .= " [Note: $dropoffNotes]";
+        }
+        
+        $returnDetails = json_encode([
+            'dropoff_location' => $combinedLocation,
+            'dropoff_notes' => $dropoffNotes
+        ]);
         
     } else if ($returnMethod === 'pickup') {
         // Validate pickup information
@@ -188,8 +198,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit();
     }
     
-    // Redirect to history page with returns tab active
-    header("Location: history.php?tab=returns");
+    // Redirect back to rentals tab
+    header("Location: rented_books.php?tab=rentals");
     exit();
 } else {
     // Invalid request

@@ -1,660 +1,717 @@
 <?php
 include("session.php");
 include("connect.php");
-
-include_once('order_utils.php');
+require_once("includes/audit_logger.php");
 
 $userType = $_SESSION['usertype'] ?? '';
 $userId = $_SESSION['id'] ?? 0;
 
 // Redirect if not logged in
-if (!isset($_SESSION['id'])) {
+if (!isset($_SESSION['id']) || empty($userId)) {
     header("Location: login.php");
     exit();
 }
 
-// At the beginning of checkout.php, add this check
-// Always recalculate cart totals from the database to ensure they're current
-$cartQuery = "SELECT 
-    SUM(CASE 
-        WHEN c.purchase_type = 'rent' 
-        THEN b.rent_price * c.rental_weeks * c.quantity 
-        ELSE b.price * c.quantity 
-    END) as total_amount,
-    COUNT(*) as item_count
-FROM cart c
-JOIN books b ON c.book_id = b.book_id
-WHERE c.user_id = ?";
-$cartTotalStmt = $conn->prepare($cartQuery);
-$cartTotalStmt->bind_param("i", $userId);
-$cartTotalStmt->execute();
-$cartTotalResult = $cartTotalStmt->get_result();
-$cartTotalData = $cartTotalResult->fetch_assoc();
-
-$subtotal = $cartTotalData['total_amount'] ?? 0;
-$itemCount = $cartTotalData['item_count'] ?? 0;
-$discount = 0;
-
-// No tax, and no shipping fee yet - will be added based on payment method
-$total = $subtotal - $discount;
-
-// Update cart_details in session with fresh data
-$_SESSION['cart_details'] = [
-    'subtotal' => $subtotal,
-    'shipping' => 0, // Will be calculated based on payment method
-    'discount' => $discount,
-    'total' => $total,
-    'itemCount' => $itemCount
-];
-
-// Process checkout form
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Validate shipping address information
-    $firstName = mysqli_real_escape_string($conn, $_POST['first_name']);
-    $lastName = mysqli_real_escape_string($conn, $_POST['last_name']);
-    $email = mysqli_real_escape_string($conn, $_POST['email']);
-    $phone = mysqli_real_escape_string($conn, $_POST['phone']);
-    $address = mysqli_real_escape_string($conn, $_POST['address']);
-    $city = mysqli_real_escape_string($conn, $_POST['city']);
-    $postalCode = mysqli_real_escape_string($conn, $_POST['postal_code']);
-    $notes = mysqli_real_escape_string($conn, $_POST['notes'] ?? '');
-    $paymentMethod = mysqli_real_escape_string($conn, $_POST['payment_method'] ?? 'cod');
-    
-    // Validation - simple check that required fields are filled
-    if (empty($firstName) || empty($lastName) || empty($email) || empty($phone) || empty($address) || empty($city) || empty($postalCode)) {
-        $_SESSION['checkout_error'] = "Please fill in all required fields.";
-        header("Location: checkout.php");
-        exit();
-    }
-    
-    // Begin transaction
-    $conn->begin_transaction();
-    
-    try {
-        // 1. Calculate cart total BEFORE creating the order
-        $cartTotalQuery = "SELECT 
-        SUM(CASE 
-            WHEN c.purchase_type = 'rent' 
-            THEN c.rental_weeks * b.rent_price * c.quantity 
-            ELSE b.price * c.quantity 
-        END) as total_amount
-        FROM cart c
-        JOIN books b ON c.book_id = b.book_id
-        WHERE c.user_id = ?";
-        $cartTotalStmt = $conn->prepare($cartTotalQuery);
-        $cartTotalStmt->bind_param("i", $userId);
-        $cartTotalStmt->execute();
-        $cartTotalResult = $cartTotalStmt->get_result();
-        $cartTotalData = $cartTotalResult->fetch_assoc();
-        $subtotal = $cartTotalData['total_amount'] ?? 0;
-        
-        // Add shipping fee only for Cash on Delivery
-        $shippingFee = ($paymentMethod === 'cod') ? 60 : 0;
-        $totalAmount = $subtotal + $shippingFee;
-    
-        // Debugging
-        error_log("Payment Method: " . $paymentMethod);
-        error_log("Subtotal: " . $subtotal);
-        error_log("Shipping Fee: " . $shippingFee);
-        error_log("Total Amount: " . $totalAmount);
-        
-        if ($totalAmount <= 0) {
-            throw new Exception("Your cart appears to be empty or has invalid items.");
-        }
-
-        // 2. Create new order with the correct total amount
-        $orderStmt = $conn->prepare("INSERT INTO orders (user_id, first_name, last_name, email, phone, address, city, postal_code, notes, payment_method, shipping_fee, order_date, total_amount) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)");
-            $orderStmt->bind_param("isssssssssid", $userId, $firstName, $lastName, $email, $phone, $address, $city, $postalCode, $notes, $paymentMethod, $shippingFee, $totalAmount);
-            $orderStmt->execute();
-            $orderId = $conn->insert_id;
-        
-        // 3. Get cart items
-        $cartStmt = $conn->prepare("SELECT c.*, b.user_id as seller_id, b.price, b.rent_price, 
-                         c.rental_weeks as rental_weeks, c.purchase_type as purchase_type 
-                         FROM cart c 
-                         JOIN books b ON c.book_id = b.book_id 
-                         WHERE c.user_id = ?");
-        $cartStmt->bind_param("i", $userId);
-        $cartStmt->execute();
-        $cartResult = $cartStmt->get_result();
-        
-        if ($cartResult->num_rows === 0) {
-            // No items in cart
-            throw new Exception("Your cart is empty.");
-        }
-        
-        // 4. Add items to order_items table
-        $itemStmt = $conn->prepare("INSERT INTO order_items (order_id, book_id, seller_id, quantity, purchase_type, rental_weeks, unit_price) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?)");
-        
-        while ($cartItem = $cartResult->fetch_assoc()) {
-            $bookId = $cartItem['book_id'];
-            $sellerId = $cartItem['seller_id'];
-            $quantity = $cartItem['quantity'];
-            $purchaseType = $cartItem['purchase_type'];
-            $rentalWeeks = $cartItem['rental_weeks'] ?? 1;
-            
-            // Fetch book details to get accurate pricing
-            $bookStmt = $conn->prepare("SELECT price, rent_price FROM books WHERE book_id = ?");
-            $bookStmt->bind_param("i", $bookId);
-            $bookStmt->execute();
-            $bookResult = $bookStmt->get_result();
-            $bookDetails = $bookResult->fetch_assoc();
-            
-            // Make sure purchase_type is never empty
-            if (empty($purchaseType)) {
-                // Determine purchase type based on price and rental weeks
-                if ($rentalWeeks > 0) {
-                    $purchaseType = 'rent';
-                    $unitPrice = $bookDetails['rent_price'] * $rentalWeeks;
-                } else {
-                    // Compare unit price with book price to determine if it's a rental or purchase
-                    $unitPrice = $cartItem['unit_price'] ?? 0;
-                    if ($unitPrice > 0 && $unitPrice < $bookDetails['price'] * 0.9) {
-                        $purchaseType = 'rent';
-                    } else {
-                        $purchaseType = 'buy';
-                        $unitPrice = $bookDetails['price'];
-                        $rentalWeeks = NULL;
-                    }
-                }
-            } else {
-                // Calculate unit price based on purchase type
-                if ($purchaseType == 'rent') {
-                    $unitPrice = $bookDetails['rent_price'] * $rentalWeeks;
-                } else {
-                    $unitPrice = $bookDetails['price'];
-                    // For buy items, set rental_weeks to NULL
-                    $rentalWeeks = NULL;
-                }
-            }
-            
-            // Detailed error logging
-            error_log("Checkout Order Item - Book ID: $bookId, Purchase Type: $purchaseType, Rental Weeks: " . ($rentalWeeks ?? 'NULL') . ", Unit Price: $unitPrice");
-            
-            $itemStmt->bind_param("iiisiid", $orderId, $bookId, $sellerId, $quantity, $purchaseType, $rentalWeeks, $unitPrice);
-            
-            if (!$itemStmt->execute()) {
-                error_log("Error inserting order item: " . $itemStmt->error);
-                throw new Exception("Failed to insert order item for book ID: $bookId");
-            }
-        }
-
-                // After inserting all items, calculate and update the final order total
-                calculateOrderTotal($conn, $orderId);
-            
-            // Update book stock
-            $stockStmt = $conn->prepare("UPDATE books SET stock = stock - ? WHERE book_id = ? AND stock >= ?");
-            $stockStmt->bind_param("iii", $quantity, $bookId, $quantity);
-            $stockStmt->execute();
-            
-            if ($stockStmt->affected_rows === 0) {
-                // Not enough stock
-                throw new Exception("Sorry, one or more items in your cart are no longer available in the requested quantity.");
-            }
-        
-        
-        // 5. Clear the user's cart
-        $clearCartStmt = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
-        $clearCartStmt->bind_param("i", $userId);
-        $clearCartStmt->execute();
-        
-        // 6. Store the order total in session for payment page
-        $_SESSION['order_total'] = $totalAmount;
-        $_SESSION['order_id'] = $orderId;
-        
-        // 7. Commit transaction
-        $conn->commit();
-        
-        // 8. Redirect to payment methods page
-        header("Location: payment_methods.php?order_id=$orderId");
-        exit();
-        
-    } catch (Exception $e) {
-        // Rollback transaction on error
-        $conn->rollback();
-        $_SESSION['checkout_error'] = $e->getMessage();
-        header("Location: checkout.php");
-        exit();
-    }
-}
-
-// Get user information to pre-fill form
+// Fetch user profile for pre-filling form
 $userQuery = "SELECT * FROM users WHERE id = ?";
 $userStmt = $conn->prepare($userQuery);
 $userStmt->bind_param("i", $userId);
 $userStmt->execute();
-$userResult = $userStmt->get_result();
-$userData = $userResult->fetch_assoc();
+$userData = $userStmt->get_result()->fetch_assoc() ?? [];
 
-$subtotal = $_SESSION['cart_details']['subtotal'] ?? 0;
-$discount = $_SESSION['cart_details']['discount'] ?? 0;
-$total = $_SESSION['cart_details']['total'] ?? 0;
+// Fetch current cart items with book details and seller details
+$cartQuery = "SELECT c.*, b.title, b.author, b.price, b.rent_price, b.cover_image, 
+                     b.security_deposit, b.book_value, b.stock, b.user_id AS seller_id,
+                     u.firstname AS seller_first, u.lastname AS seller_last
+              FROM cart c
+              JOIN books b ON c.book_id = b.book_id
+              JOIN users u ON b.user_id = u.id
+              WHERE c.user_id = ?";
+$cartStmt = $conn->prepare($cartQuery);
+$cartStmt->bind_param("i", $userId);
+$cartStmt->execute();
+$cartResult = $cartStmt->get_result();
+$cartItems = [];
+$subtotal = 0;
+$totalDeposit = 0;
+$itemCount = 0;
 
-// Get cart total
-if ($subtotal <= 0) {
-    // Recalculate totals from cart items
-    $cartQuery = "SELECT 
-        SUM(CASE 
-            WHEN c.purchase_type = 'rent' 
-            THEN b.rent_price * c.rental_weeks * c.quantity 
-            ELSE b.price * c.quantity 
-        END) as total_amount
-    FROM cart c
-    JOIN books b ON c.book_id = b.book_id
-    WHERE c.user_id = ?";
-    $cartTotalStmt = $conn->prepare($cartQuery);
-    $cartTotalStmt->bind_param("i", $userId);
-    $cartTotalStmt->execute();
-    $cartTotalResult = $cartTotalStmt->get_result();
-    $cartTotalData = $cartTotalResult->fetch_assoc();
+while ($item = $cartResult->fetch_assoc()) {
+    $qty = (int)$item['quantity'];
+    $isRent = ($item['purchase_type'] === 'rent');
+    $weeks = $isRent ? max(1, (int)$item['rental_weeks']) : 1;
     
-    $subtotal = $cartTotalData['total_amount'] ?? 0;
-    $discount = 0;
-    $total = $subtotal - $discount;
+    if ($isRent) {
+        $itemPrice = (float)$item['rent_price'] * $weeks;
+        $depositVal = (float)($item['security_deposit'] > 0 ? $item['security_deposit'] : ($item['book_value'] > 0 ? $item['book_value'] : 0));
+        $itemDeposit = $depositVal * $qty;
+    } else {
+        $itemPrice = (float)$item['price'];
+        $itemDeposit = 0;
+    }
+    
+    $lineTotal = $itemPrice * $qty;
+    $subtotal += $lineTotal;
+    $totalDeposit += $itemDeposit;
+    $itemCount += $qty;
+    
+    $item['computed_unit_price'] = $itemPrice;
+    $item['computed_line_total'] = $lineTotal;
+    $item['computed_deposit'] = $itemDeposit;
+    $cartItems[] = $item;
 }
 
-unset($_SESSION['cart_subtotal']);
-unset($_SESSION['cart_tax']);
-unset($_SESSION['cart_shipping']);
-unset($_SESSION['cart_total']);
-
-error_log("Subtotal: $subtotal");
-error_log("Discount: $discount");
-error_log("Total: $total");
-
-// Redirect to cart if empty
-$cartCountStmt = $conn->prepare("SELECT COUNT(*) as cart_count FROM cart WHERE user_id = ?");
-$cartCountStmt->bind_param("i", $userId);
-$cartCountStmt->execute();
-$cartCountResult = $cartCountStmt->get_result();
-$cartCount = $cartCountResult->fetch_assoc()['cart_count'];
-
-if ($cartCount == 0) {
-    $_SESSION['cart_message'] = "Your cart is empty.";
-    $_SESSION['cart_message_type'] = "warning";
+// If cart is empty, redirect back to cart
+if (empty($cartItems)) {
     header("Location: cart.php");
     exit();
 }
-?>
 
+// Handle Order Submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $firstName = trim($_POST['first_name'] ?? '');
+    $lastName = trim($_POST['last_name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    $address = trim($_POST['address'] ?? '');
+    $city = trim($_POST['city'] ?? '');
+    $postalCode = trim($_POST['postal_code'] ?? '');
+    $handoverMethod = $_POST['handover_method'] ?? 'pickup';
+    $paymentMethod = $_POST['payment_method'] ?? 'qrph';
+    $refundMobile = trim($_POST['refund_mobile'] ?? '');
+    $userNotes = trim($_POST['notes'] ?? '');
+    
+    // Basic validation
+    if (empty($firstName) || empty($lastName) || empty($phone) || empty($address) || empty($city)) {
+        $_SESSION['checkout_error'] = "Please fill in all required shipping fields.";
+        header("Location: checkout.php");
+        exit();
+    }
+    
+    $shippingFee = ($handoverMethod === 'delivery') ? 60.00 : 0.00;
+    $grandTotal = $subtotal + $totalDeposit + $shippingFee;
+    
+    // Payment Status & Reference logic
+    if ($paymentMethod === 'qrph') {
+        $paymentStatus = 'paid';
+        $paymentReceipt = 'QRPH-' . date('Ymd') . '-' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
+        $orderStatus = 'processing';
+        $paymentDate = date('Y-m-d H:i:s');
+    } elseif ($paymentMethod === 'cod') {
+        $paymentStatus = 'pending';
+        $paymentReceipt = null;
+        $orderStatus = 'pending';
+        $paymentDate = null;
+    } else { // bank
+        $paymentStatus = 'awaiting_payment';
+        $paymentReceipt = null;
+        $orderStatus = 'pending';
+        $paymentDate = null;
+    }
+    
+    // Format notes with refund mobile if provided
+    $fullNotes = $userNotes;
+    if (!empty($refundMobile)) {
+        $fullNotes = "[Deposit Refund: " . $refundMobile . "] " . $fullNotes;
+    }
+    if ($handoverMethod === 'pickup') {
+        $fullNotes = "[Campus Meet-up] " . $fullNotes;
+    }
+    
+    $conn->begin_transaction();
+    try {
+        // 1. Insert order
+        $orderSql = "INSERT INTO orders (user_id, first_name, last_name, email, phone, address, city, postal_code, notes, payment_method, shipping_fee, payment_status, payment_date, payment_receipt, order_status, total_amount, order_date) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+        $orderStmt = $conn->prepare($orderSql);
+        $orderStmt->bind_param("isssssssssdssssd", 
+            $userId, $firstName, $lastName, $email, $phone, $address, $city, $postalCode, 
+            $fullNotes, $paymentMethod, $shippingFee, $paymentStatus, $paymentDate, $paymentReceipt, 
+            $orderStatus, $grandTotal
+        );
+        $orderStmt->execute();
+        $orderId = $conn->insert_id;
+        
+        // 2. Insert order items & handle book rentals
+        $itemSql = "INSERT INTO order_items (order_id, book_id, seller_id, quantity, purchase_type, rental_weeks, unit_price, status) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')";
+        $itemStmt = $conn->prepare($itemSql);
+        
+        $rentalSql = "INSERT INTO book_rentals (user_id, book_id, seller_id, order_id, rental_date, due_date, rental_weeks, status, total_price) 
+                      VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? WEEK), ?, 'active', ?)";
+        $rentalStmt = $conn->prepare($rentalSql);
+        
+        $stockSql = "UPDATE books SET stock = GREATEST(0, stock - ?) WHERE book_id = ?";
+        $stockStmt = $conn->prepare($stockSql);
+        
+        foreach ($cartItems as $item) {
+            $bId = (int)$item['book_id'];
+            $sId = (int)$item['seller_id'];
+            $qty = (int)$item['quantity'];
+            $pType = $item['purchase_type'];
+            $rWeeks = ($pType === 'rent') ? (int)$item['rental_weeks'] : null;
+            $uPrice = (float)$item['computed_unit_price'];
+            
+            // Insert order item: order_id(i), book_id(i), seller_id(i), quantity(i), purchase_type(s), rental_weeks(i), unit_price(d)
+            $itemStmt->bind_param("iiiisid", $orderId, $bId, $sId, $qty, $pType, $rWeeks, $uPrice);
+            $itemStmt->execute();
+            
+            // If rental, register active rental
+            if ($pType === 'rent') {
+                $rentalCost = $uPrice * $qty;
+                $rentalWeeksVal = max(1, (int)$item['rental_weeks']);
+                
+                // book_rentals.seller_id references sellers(id), NOT users(id)
+                $sellersTableId = 0;
+                $sellerLookStmt = $conn->prepare("SELECT id FROM sellers WHERE user_id = ?");
+                $sellerLookStmt->bind_param("i", $sId);
+                $sellerLookStmt->execute();
+                $sRes = $sellerLookStmt->get_result();
+                if ($sRow = $sRes->fetch_assoc()) {
+                    $sellersTableId = (int)$sRow['id'];
+                } else {
+                    // Fallback create seller profile if not present so FK constraint is satisfied
+                    $uStmt = $conn->prepare("SELECT firstname, lastname, email FROM users WHERE id = ?");
+                    $uStmt->bind_param("i", $sId);
+                    $uStmt->execute();
+                    $uData = $uStmt->get_result()->fetch_assoc() ?? [];
+                    $shopName = ($uData['firstname'] ?? 'Seller') . "'s Store";
+                    $first = $uData['firstname'] ?? 'Seller';
+                    $last = $uData['lastname'] ?? 'Store';
+                    $bEmail = $uData['email'] ?? ('seller' . $sId . '@bookwagon.com');
+                    
+                    $createS = $conn->prepare("INSERT INTO sellers (user_id, shop_name, first_name, last_name, business_email, status) VALUES (?, ?, ?, ?, ?, 'approved')");
+                    $createS->bind_param("issss", $sId, $shopName, $first, $last, $bEmail);
+                    $createS->execute();
+                    $sellersTableId = $conn->insert_id;
+                }
+                
+                $rentalStmt->bind_param("iiiiisd", $userId, $bId, $sellersTableId, $orderId, $rentalWeeksVal, $rentalWeeksVal, $rentalCost);
+                $rentalStmt->execute();
+            }
+            
+            // Update stock
+            $stockStmt->bind_param("ii", $qty, $bId);
+            $stockStmt->execute();
+        }
+        
+        // 3. Clear user cart
+        $clearStmt = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
+        $clearStmt->bind_param("i", $userId);
+        $clearStmt->execute();
+        
+        // 4. Record audit log
+        $activityDetails = "Placed Order #$orderId | Total: ₱" . number_format($grandTotal, 2) . " | Payment: " . strtoupper($paymentMethod);
+        if ($paymentReceipt) {
+            $activityDetails .= " (Ref: $paymentReceipt)";
+        }
+        log_activity($userId, 'Order Placed', $activityDetails);
+        
+        $conn->commit();
+        
+        // Redirect to order confirmation
+        header("Location: order_confirmation.php?order_id=" . $orderId);
+        exit();
+        
+    } catch (Exception $e) {
+        $conn->rollback();
+        $_SESSION['checkout_error'] = "Order processing failed: " . $e->getMessage();
+        header("Location: checkout.php");
+        exit();
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
     <title>Checkout - BookWagon</title>
-    <!-- Bootstrap CSS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
     <style>
         :root {
-            --primary-color: #f8a100;
-            --secondary-color: #f8f9fa;
-            --text-dark: #212529;
-            --text-muted: #6c757d;
-            --border-color: #dee2e6;
+            --bw-primary: #f8a100;
+            --bw-dark: #1e293b;
+            --bw-muted: #64748b;
+            --bw-border: #e9ecef;
         }
-        
+
         body {
-            font-family: 'Arial', sans-serif;
-            color: var(--text-dark);
-            background-color: #f4f6f9;
-        }
-        .navbar {
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .navbar-brand img {
-            height: 60px;
-        }
-        
-        .checkout-container {
-            max-width: 1000px;
-            margin: 40px auto;
-        }
-        
-        .checkout-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .checkout-steps {
-            display: flex;
-            justify-content: center;
-            margin-bottom: 30px;
-        }
-        
-        .step {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #fafbfc;
+            color: var(--bw-dark);
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            width: 150px;
         }
-        
-        .step-number {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background-color: var(--text-muted);
-            color: white;
+
+        .checkout-box {
+            background: #ffffff;
+            border: 1px solid var(--bw-border);
+            border-radius: 10px;
+            padding: 20px 22px;
+            margin-bottom: 16px;
+        }
+
+        .checkout-box-title {
+            font-size: 0.98rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: var(--bw-dark);
+        }
+
+        .form-label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 5px;
+        }
+
+        .form-control, .form-select {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 0.88rem;
+        }
+
+        .form-control:focus {
+            border-color: var(--bw-primary);
+            box-shadow: 0 0 0 3px rgba(248, 161, 0, 0.15);
+        }
+
+        /* Clean option selection */
+        .option-item {
+            border: 1px solid var(--bw-border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            cursor: pointer;
+            background: #ffffff;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            margin-bottom: 10px;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            transition: border-color 0.15s ease;
         }
-        
-        .step-number.active {
-            background-color: var(--primary-color);
+
+        .option-item:hover {
+            border-color: #cbd5e1;
         }
-        
-        .step-line {
-            height: 2px;
-            width: 100px;
-            background-color: var(--text-muted);
-            margin: 15px 0;
+
+        .option-item.active {
+            border-color: var(--bw-primary);
+            background: #fffdfa;
         }
-        
-        .step-title {
-            font-size: 0.9rem;
-            text-align: center;
-            color: var(--text-muted);
+
+        .option-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        
-        .step-title.active {
-            color: var(--primary-color);
+
+        .option-left input[type="radio"] {
+            accent-color: var(--bw-primary);
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .option-name {
+            font-size: 0.88rem;
             font-weight: 600;
+            color: var(--bw-dark);
         }
-        
-        .checkout-card {
-            background-color: #fff;
+
+        .option-price {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--bw-muted);
+        }
+
+        /* Order Summary */
+        .summary-box {
+            background: #ffffff;
+            border: 1px solid var(--bw-border);
             border-radius: 10px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
-            overflow: hidden;
-            margin-bottom: 30px;
-        }
-        
-        .checkout-section {
-            padding: 25px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .checkout-section:last-child {
-            border-bottom: none;
-        }
-        
-        .form-label {
-            font-weight: 500;
-        }
-        
-        .summary-card {
-            background-color: #fff;
-            border-radius: 10px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
-            padding: 25px;
+            padding: 20px 22px;
             position: sticky;
             top: 20px;
         }
-        
+
         .summary-row {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 15px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid var(--border-color);
+            font-size: 0.86rem;
+            color: #475569;
+            margin-bottom: 10px;
         }
-        
-        .summary-row:last-of-type {
-            border-bottom: none;
+
+        .summary-row.total {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--bw-dark);
+            border-top: 1px solid var(--bw-border);
+            padding-top: 12px;
+            margin-top: 12px;
             margin-bottom: 0;
-            padding-bottom: 0;
         }
-        
-        .summary-total {
-            font-weight: bold;
-            font-size: 1.1rem;
-        }
-        
-        .continue-btn {
-            background-color: var(--primary-color);
-            color: white;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 5px;
+
+        .btn-submit-order {
+            background: var(--bw-primary);
+            color: #ffffff;
             font-weight: 600;
-            transition: all 0.2s;
+            font-size: 0.92rem;
+            border: none;
+            border-radius: 6px;
+            padding: 12px;
             width: 100%;
-            margin-top: 20px;
+            margin-top: 16px;
+            transition: background 0.15s ease;
         }
-        
-        .continue-btn:hover {
-            background-color: #e69400;
-            transform: translateY(-2px);
+
+        .btn-submit-order:hover {
+            background: #e09000;
+            color: #ffffff;
+        }
+
+        /* Mini Item in Summary */
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 0.82rem;
+        }
+
+        .summary-item:last-child {
+            border-bottom: none;
+        }
+
+        .summary-item-title {
+            font-weight: 600;
+            color: var(--bw-dark);
+            max-width: 180px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     </style>
 </head>
 <body>
-    <!-- Include Header -->
+
+    <!-- Header Navigation -->
     <?php include("include/user_header.php"); ?>
 
-    <div class="container checkout-container">
-        <div class="checkout-header">
-            <h2>Checkout</h2>
-        </div>
+    <div class="container my-4 flex-grow-1" style="max-width: 960px;">
         
-        <div class="checkout-steps">
-            <div class="step">
-                <div class="step-number active">1</div>
-                <div class="step-title active">Shipping</div>
-            </div>
-            <div class="step-line"></div>
-            <div class="step">
-                <div class="step-number">2</div>
-                <div class="step-title">Payment</div>
-            </div>
-            <div class="step-line"></div>
-            <div class="step">
-                <div class="step-number">3</div>
-                <div class="step-title">Confirmation</div>
-            </div>
+        <div class="mb-3">
+            <h4 class="fw-bold mb-1">Checkout</h4>
+            <div class="text-muted" style="font-size: 0.85rem;">Please review your details and confirm your order.</div>
         </div>
-        
+
         <?php if (isset($_SESSION['checkout_error'])): ?>
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <?php echo $_SESSION['checkout_error']; unset($_SESSION['checkout_error']); ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-        <?php endif; ?>
-        
-        <div class="row">
-            <!-- Checkout Form Column -->
-            <div class="col-lg-8">
-                <div class="checkout-card">
-                    <form action="checkout.php" method="post">
-                        <div class="checkout-section">
-                            <h4 class="mb-4">Shipping Information</h4>
-                            
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="first_name" class="form-label">First Name</label>
-                                    <input type="text" class="form-control" id="first_name" name="first_name" value="<?php echo htmlspecialchars($userData['firstname'] ?? ''); ?>" required>
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="last_name" class="form-label">Last Name</label>
-                                    <input type="text" class="form-control" id="last_name" name="last_name" value="<?php echo htmlspecialchars($userData['lastname'] ?? ''); ?>" required>
-                                </div>
-                            </div>
-                            
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="email" class="form-label">Email</label>
-                                    <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($userData['email'] ?? ''); ?>" required>
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="phone" class="form-label">Phone</label>
-                                    <input type="tel" class="form-control" id="phone" name="phone" value="<?php echo htmlspecialchars($userData['phone'] ?? ''); ?>" required>
-                                </div>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="address" class="form-label">Address</label>
-                                <input type="text" class="form-control" id="address" name="address" value="<?php echo htmlspecialchars($userData['address'] ?? ''); ?>" required>
-                            </div>
-                            
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="city" class="form-label">City</label>
-                                    <input type="text" class="form-control" id="city" name="city" value="<?php echo htmlspecialchars($userData['city'] ?? ''); ?>" required>
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="postal_code" class="form-label">Postal Code</label>
-                                    <input type="text" class="form-control" id="postal_code" name="postal_code" value="<?php echo htmlspecialchars($userData['postal_code'] ?? ''); ?>" required>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="checkout-section">
-                            <h4 class="mb-4">Payment Method</h4>
-                            
-                            <div class="mb-3">
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input payment-method" type="radio" name="payment_method" id="payment_cod" value="cod" checked>
-                                    <label class="form-check-label d-flex align-items-center" for="payment_cod">
-                                        <i class="fas fa-truck me-2 text-secondary"></i>
-                                        Cash on Delivery
-                                        <span class="badge bg-warning text-dark ms-2">+ ₱60 shipping fee</span>
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check mb-2">
-                                    <input class="form-check-input payment-method" type="radio" name="payment_method" id="payment_pickup" value="pickup">
-                                    <label class="form-check-label d-flex align-items-center" for="payment_pickup">
-                                        <i class="fas fa-store me-2 text-secondary"></i>
-                                        Pickup / Meet-up
-                                    </label>
-                                </div>
-                                
-                                <div class="form-check">
-                                    <input class="form-check-input payment-method" type="radio" name="payment_method" id="payment_bank" value="bank">
-                                    <label class="form-check-label d-flex align-items-center" for="payment_bank">
-                                        <i class="fas fa-university me-2 text-secondary"></i>
-                                        Bank Transfer
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="checkout-section">
-                            <h4 class="mb-4">Additional Information</h4>
-                            
-                            <div class="mb-3">
-                                <label for="notes" class="form-label">Order Notes (Optional)</label>
-                                <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Notes about your order, e.g. special delivery instructions"></textarea>
-                            </div>
-                        </div>
-                        
-                        <div class="checkout-section">
-                            <button type="submit" class="continue-btn">
-                                <i class="fas fa-credit-card me-2"></i>Proceed to Payment
-                            </button>
-                        </div>
-                    </form>
-                </div>
+            <div class="alert alert-danger py-2 mb-3" style="font-size: 0.85rem;">
+                <?php echo htmlspecialchars($_SESSION['checkout_error']); unset($_SESSION['checkout_error']); ?>
             </div>
-            
-            <!-- Order Summary Column -->
-            <div class="col-lg-4">
-                <div class="summary-card">
-                    <h4 class="mb-4">Order Summary</h4>
+        <?php endif; ?>
 
-
-                    <div class="summary-row">
-                        <span>Items (<?php echo $_SESSION['cart_details']['itemCount'] ?? 0; ?>)</span>
-                        <span>₱<?php echo number_format($_SESSION['cart_details']['subtotal'] ?? 0, 2); ?></span>
-                    </div>
+        <form id="checkoutForm" action="checkout.php" method="POST">
+            <div class="row g-3">
+                
+                <!-- Left Column -->
+                <div class="col-lg-7">
                     
-                    <div class="summary-row">
-                        <span>Discount</span>
-                        <span>₱<?php echo number_format($_SESSION['cart_details']['discount'] ?? 0, 2); ?></span>
-                    </div>
-                    
-                    <div class="summary-row shipping-row" style="display: flex;">
-                        <span>Shipping fee (COD)</span>
-                        <span>₱60.00</span>
-                    </div>
-                    
-                    <div class="summary-row summary-total">
-                        <span>Total</span>
-                        <span id="final-total">₱<?php echo number_format(($_SESSION['cart_details']['total'] ?? 0) + 60, 2); ?></span>
-                    </div>
-                    <div class="mt-4">
-                        <h5>Payment Method Selected:</h5>
-                        <div id="selected-payment-method" class="alert alert-info mt-2">
-                            <i class="fas fa-truck me-2"></i> Cash on Delivery
+                    <!-- 1. Contact & Address -->
+                    <div class="checkout-box">
+                        <div class="checkout-box-title">1. Delivery Address</div>
+                        
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label" for="first_name">First Name</label>
+                                <input type="text" class="form-control" id="first_name" name="first_name" 
+                                       value="<?php echo htmlspecialchars($userData['firstname'] ?? ''); ?>" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label" for="last_name">Last Name</label>
+                                <input type="text" class="form-control" id="last_name" name="last_name" 
+                                       value="<?php echo htmlspecialchars($userData['lastname'] ?? ''); ?>" required>
+                            </div>
+                            
+                            <div class="col-6">
+                                <label class="form-label" for="phone">Phone Number</label>
+                                <input type="tel" class="form-control" id="phone" name="phone" placeholder="09XXXXXXXXX"
+                                       value="<?php echo htmlspecialchars($userData['phone'] ?? ''); ?>" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label" for="email">Email</label>
+                                <input type="email" class="form-control" id="email" name="email" 
+                                       value="<?php echo htmlspecialchars($userData['email'] ?? ''); ?>" required>
+                            </div>
+                            
+                            <div class="col-12">
+                                <label class="form-label" for="address">Address</label>
+                                <input type="text" class="form-control" id="address" name="address" placeholder="Room/Unit, Street, Barangay"
+                                       value="<?php echo htmlspecialchars($userData['address'] ?? ''); ?>" required>
+                            </div>
+                            
+                            <div class="col-7">
+                                <label class="form-label" for="city">City</label>
+                                <input type="text" class="form-control" id="city" name="city" 
+                                       value="<?php echo htmlspecialchars($userData['city'] ?? ''); ?>" required>
+                            </div>
+                            <div class="col-5">
+                                <label class="form-label" for="postal_code">Postal Code</label>
+                                <input type="text" class="form-control" id="postal_code" name="postal_code" 
+                                       value="<?php echo htmlspecialchars($userData['postal_code'] ?? ''); ?>" required>
+                            </div>
                         </div>
                     </div>
+
+                    <!-- 2. Handover Method -->
+                    <div class="checkout-box">
+                        <div class="checkout-box-title">2. Handover Method</div>
+                        
+                        <label class="option-item active" id="label-pickup">
+                            <div class="option-left">
+                                <input type="radio" name="handover_method" value="pickup" checked onchange="updateShipping(0, this)">
+                                <div>
+                                    <div class="option-name">Campus Meet-up / Pick-up</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Meet with owner on campus</small>
+                                </div>
+                            </div>
+                            <div class="option-price text-success">Free</div>
+                        </label>
+
+                        <label class="option-item" id="label-delivery">
+                            <div class="option-left">
+                                <input type="radio" name="handover_method" value="delivery" onchange="updateShipping(60, this)">
+                                <div>
+                                    <div class="option-name">Standard Delivery</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Courier to your address</small>
+                                </div>
+                            </div>
+                            <div class="option-price">+ ₱60.00</div>
+                        </label>
+                    </div>
+
+                    <!-- 3. Payment Method -->
+                    <div class="checkout-box">
+                        <div class="checkout-box-title">3. Payment Method</div>
+                        
+                        <label class="option-item active" id="label-pay-qrph">
+                            <div class="option-left">
+                                <input type="radio" name="payment_method" value="qrph" checked onchange="selectPaymentMethod('qrph', this)">
+                                <div>
+                                    <div class="option-name">QR Ph (GCash / Maya)</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Instant e-wallet demo</small>
+                                </div>
+                            </div>
+                            <span class="badge bg-light text-dark border" style="font-size: 0.7rem;">Demo</span>
+                        </label>
+
+                        <label class="option-item" id="label-pay-cod">
+                            <div class="option-left">
+                                <input type="radio" name="payment_method" value="cod" onchange="selectPaymentMethod('cod', this)">
+                                <div>
+                                    <div class="option-name">Cash on Delivery / Meet-up</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Pay cash in person</small>
+                                </div>
+                            </div>
+                        </label>
+
+                        <label class="option-item" id="label-pay-bank">
+                            <div class="option-left">
+                                <input type="radio" name="payment_method" value="bank" onchange="selectPaymentMethod('bank', this)">
+                                <div>
+                                    <div class="option-name">Bank Transfer</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Manual transfer</small>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <!-- 4. Notes (Optional) -->
+                    <div class="checkout-box">
+                        <div class="checkout-box-title">4. Notes (Optional)</div>
+                        <textarea class="form-control" name="notes" rows="2" placeholder="Special instructions or meetup details..."></textarea>
+                    </div>
+
                 </div>
+
+                <!-- Right Column: Summary -->
+                <div class="col-lg-5">
+                    <div class="summary-box">
+                        <div class="checkout-box-title mb-2">Order Summary</div>
+                        
+                        <!-- Items list -->
+                        <div class="mb-3">
+                            <?php foreach ($cartItems as $item): ?>
+                                <div class="summary-item">
+                                    <div>
+                                        <div class="summary-item-title"><?php echo htmlspecialchars($item['title']); ?></div>
+                                        <div class="text-muted" style="font-size: 0.74rem;">
+                                            <?php echo ($item['purchase_type'] === 'rent') ? 'Rent (' . (int)$item['rental_weeks'] . ' wks)' : 'Buy'; ?> 
+                                            × <?php echo (int)$item['quantity']; ?>
+                                        </div>
+                                    </div>
+                                    <div class="fw-semibold">₱<?php echo number_format($item['computed_line_total'], 2); ?></div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+
+                        <!-- Price Lines -->
+                        <div class="summary-row">
+                            <span>Subtotal</span>
+                            <span class="fw-semibold">₱<?php echo number_format($subtotal, 2); ?></span>
+                        </div>
+
+                        <?php if ($totalDeposit > 0): ?>
+                            <div class="summary-row text-success">
+                                <span>Security Deposit (Refundable)</span>
+                                <span class="fw-semibold">₱<?php echo number_format($totalDeposit, 2); ?></span>
+                            </div>
+                        <?php endif; ?>
+
+                        <div class="summary-row">
+                            <span>Delivery</span>
+                            <span class="fw-semibold" id="shippingDisplay">Free</span>
+                        </div>
+
+                        <div class="summary-row total">
+                            <span>Total</span>
+                            <span id="grandTotalDisplay">
+                                ₱<?php echo number_format($subtotal + $totalDeposit, 2); ?>
+                            </span>
+                        </div>
+
+                        <button type="button" class="btn-submit-order" id="btnPlaceOrder" onclick="handlePlaceOrderClick()">
+                            <span id="btnPlaceOrderText">Pay with QR Ph</span>
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+            <input type="hidden" name="refund_mobile" id="hidden_refund_mobile" value="">
+        </form>
+    </div>
+
+    <!-- Simple QR Ph Modal -->
+    <div class="modal fade" id="qrphModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 380px;">
+            <div class="modal-content" style="border-radius: 10px; border: 1px solid var(--bw-border);">
+                
+                <div class="modal-header py-2 px-3">
+                    <h6 class="modal-title fw-bold" style="font-size: 0.9rem;">QR Ph Payment</h6>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+
+                <div class="modal-body text-center p-3">
+                    <div class="text-muted" style="font-size: 0.78rem;">Total to Pay</div>
+                    <div class="fw-bold mb-3" style="font-size: 1.5rem;" id="modalTotalAmount">
+                        ₱<?php echo number_format($subtotal + $totalDeposit, 2); ?>
+                    </div>
+
+                    <!-- Clean QR image -->
+                    <div class="mb-3">
+                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=BOOKWAGON-PAYMENT-DEMO" 
+                             alt="QR Code" style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px; width: 160px; height: 160px;">
+                    </div>
+
+                    <div class="text-muted mb-3" style="font-size: 0.75rem;">
+                        Scan with GCash, Maya, or any banking app
+                    </div>
+
+                    <?php if ($totalDeposit > 0): ?>
+                        <div class="text-start mb-3">
+                            <label class="form-label" style="font-size: 0.78rem;" for="input_refund_mobile">
+                                GCash / Maya Number (for Deposit Return):
+                            </label>
+                            <input type="tel" class="form-control form-control-sm" id="input_refund_mobile" 
+                                   placeholder="09XXXXXXXXX" value="<?php echo htmlspecialchars($userData['phone'] ?? ''); ?>">
+                        </div>
+                    <?php endif; ?>
+
+                    <button type="button" class="btn btn-warning w-100 py-2 fw-semibold text-dark" 
+                            style="background: #f8a100; border: none; font-size: 0.88rem;" 
+                            onclick="executeSimulatedPayment()">
+                        Simulate Payment (Demo)
+                    </button>
+                </div>
+
             </div>
         </div>
     </div>
 
-    <!-- Bootstrap JS -->
+    <!-- Global Footer -->
+    <?php include("include/footer.php"); ?>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    
+
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get elements
-            const paymentMethods = document.querySelectorAll('.payment-method');
-            const shippingRow = document.querySelector('.shipping-row');
-            const finalTotal = document.getElementById('final-total');
-            const selectedPaymentMethod = document.getElementById('selected-payment-method');
+        const subtotal = <?php echo $subtotal; ?>;
+        const totalDeposit = <?php echo $totalDeposit; ?>;
+        let currentShipping = 0;
+        let selectedPayment = 'qrph';
+
+        function updateShipping(cost, radioEl) {
+            currentShipping = cost;
             
-            // Base total without shipping
-            const baseTotal = <?php echo $_SESSION['cart_details']['total'] ?? 0; ?>;
-            
-            // Function to update totals based on payment method
-            function updateTotals() {
-                const selectedMethod = document.querySelector('input[name="payment_method"]:checked').value;
-                
-                let newTotal = baseTotal;
-                let methodDisplay = '';
-                
-                if (selectedMethod === 'cod') {
-                    shippingRow.style.display = 'flex';
-                    newTotal += 60; // Add shipping fee for COD
-                    methodDisplay = '<i class="fas fa-truck me-2"></i> Cash on Delivery';
-                } else {
-                    shippingRow.style.display = 'none';
-                    
-                    if (selectedMethod === 'pickup') {
-                        methodDisplay = '<i class="fas fa-store me-2"></i> Pickup / Meet-up';
-                    } else if (selectedMethod === 'bank') {
-                        methodDisplay = '<i class="fas fa-university me-2"></i> Bank Transfer';
-                    }
-                }
-                
-                // Update the total display
-                finalTotal.textContent = '₱' + newTotal.toFixed(2);
-                
-                // Update selected method display
-                selectedPaymentMethod.innerHTML = methodDisplay;
-            }
-            
-            // Add event listeners to payment method radios
-            paymentMethods.forEach(method => {
-                method.addEventListener('change', updateTotals);
+            document.querySelectorAll('input[name="handover_method"]').forEach(el => {
+                el.closest('.option-item').classList.remove('active');
             });
-            
-            // Initialize totals on page load
-            updateTotals();
-        });
+            radioEl.closest('.option-item').classList.add('active');
+
+            const grandTotal = subtotal + totalDeposit + currentShipping;
+            document.getElementById('shippingDisplay').textContent = cost === 0 ? 'Free' : '+ ₱' + cost.toFixed(2);
+            document.getElementById('grandTotalDisplay').textContent = '₱' + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            document.getElementById('modalTotalAmount').textContent = '₱' + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function selectPaymentMethod(method, radioEl) {
+            selectedPayment = method;
+
+            document.querySelectorAll('input[name="payment_method"]').forEach(el => {
+                el.closest('.option-item').classList.remove('active');
+            });
+            radioEl.closest('.option-item').classList.add('active');
+
+            const btnText = document.getElementById('btnPlaceOrderText');
+            if (method === 'qrph') {
+                btnText.textContent = 'Pay with QR Ph';
+            } else if (method === 'cod') {
+                btnText.textContent = 'Place Order (Cash)';
+            } else {
+                btnText.textContent = 'Place Order (Bank)';
+            }
+        }
+
+        function handlePlaceOrderClick() {
+            const form = document.getElementById('checkoutForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+
+            if (selectedPayment === 'qrph') {
+                const qrModal = new bootstrap.Modal(document.getElementById('qrphModal'));
+                qrModal.show();
+            } else {
+                form.submit();
+            }
+        }
+
+        function executeSimulatedPayment() {
+            const refundInput = document.getElementById('input_refund_mobile');
+            if (refundInput) {
+                document.getElementById('hidden_refund_mobile').value = refundInput.value.trim();
+            }
+            document.getElementById('checkoutForm').submit();
+        }
     </script>
 </body>
 </html>
