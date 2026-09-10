@@ -358,6 +358,10 @@ if (!isset($pendingSellers)) $pendingSellers = 0;
             <i class="fa-solid fa-users"></i>
             Manage Users
         </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_rentals.php' : 'admin_rentals.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_rentals.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-hand-holding-dollar"></i>
+            Escrow & Rentals
+        </a>
         <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/audit_logs.php' : 'audit_logs.php'; ?>" class="nav-item <?php echo ($currentPage === 'audit_logs.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-shield-halved"></i>
             Audit Logs

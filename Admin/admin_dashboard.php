@@ -10,6 +10,7 @@ require_once "db_connect.php";
 $totalBooks = 0;
 $totalUsers = 0;
 $pendingSellers = 0;
+$activeRentals = 0;
 
 if ($conn) {
     $res = $conn->query("SELECT COUNT(*) as cnt FROM books");
@@ -20,6 +21,9 @@ if ($conn) {
     
     $res = $conn->query("SELECT COUNT(*) as cnt FROM sellers WHERE status = 'pending'");
     if ($res && $row = $res->fetch_assoc()) $pendingSellers = $row['cnt'];
+
+    $res = $conn->query("SELECT COUNT(*) as cnt FROM book_rentals WHERE status = 'active'");
+    if ($res && $row = $res->fetch_assoc()) $activeRentals = $row['cnt'];
 }
 
 // Recent seller requests
@@ -73,35 +77,45 @@ $currentPage = basename($_SERVER['PHP_SELF']);
 
         <div class="page-content">
             <!-- Stat Cards -->
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 28px;">
-                <div class="content-card" style="padding: 22px 24px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px;">
+                <div class="content-card" style="padding: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                         <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Pending Sellers</span>
-                        <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: #fff7ed; color: #ea580c;">
+                        <div style="width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: #fff7ed; color: #ea580c;">
                             <i class="fa-solid fa-user-clock"></i>
                         </div>
                     </div>
-                    <div style="font-size: 28px; font-weight: 700; color: var(--text-dark);"><?php echo $pendingSellers; ?></div>
+                    <div style="font-size: 26px; font-weight: 700; color: var(--text-dark);"><?php echo $pendingSellers; ?></div>
                 </div>
 
-                <div class="content-card" style="padding: 22px 24px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+                <div class="content-card" style="padding: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                        <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Active Rentals</span>
+                        <div style="width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: #fef7e8; color: #d97706;">
+                            <i class="fa-solid fa-hand-holding-dollar"></i>
+                        </div>
+                    </div>
+                    <div style="font-size: 26px; font-weight: 700; color: var(--text-dark);"><?php echo $activeRentals; ?></div>
+                </div>
+
+                <div class="content-card" style="padding: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                         <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Total Books</span>
-                        <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: #eff6ff; color: #2563eb;">
+                        <div style="width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: #eff6ff; color: #2563eb;">
                             <i class="fa-solid fa-book"></i>
                         </div>
                     </div>
-                    <div style="font-size: 28px; font-weight: 700; color: var(--text-dark);"><?php echo number_format($totalBooks); ?></div>
+                    <div style="font-size: 26px; font-weight: 700; color: var(--text-dark);"><?php echo number_format($totalBooks); ?></div>
                 </div>
 
-                <div class="content-card" style="padding: 22px 24px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+                <div class="content-card" style="padding: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
                         <span style="font-size: 13px; font-weight: 500; color: var(--text-muted);">Registered Users</span>
-                        <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: #ecfdf5; color: #059669;">
+                        <div style="width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; background: #ecfdf5; color: #059669;">
                             <i class="fa-solid fa-users"></i>
                         </div>
                     </div>
-                    <div style="font-size: 28px; font-weight: 700; color: var(--text-dark);"><?php echo number_format($totalUsers); ?></div>
+                    <div style="font-size: 26px; font-weight: 700; color: var(--text-dark);"><?php echo number_format($totalUsers); ?></div>
                 </div>
             </div>
 
