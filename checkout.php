@@ -21,7 +21,7 @@ $userData = $userStmt->get_result()->fetch_assoc() ?? [];
 
 // Fetch current cart items with book details and seller details
 $cartQuery = "SELECT c.*, b.title, b.author, b.price, b.rent_price, b.cover_image, 
-                     b.security_deposit, b.book_value, b.stock, b.user_id AS seller_id,
+                     b.security_deposit, b.book_value, b.stock, b.user_id AS seller_id, b.meetup_location,
                      u.firstname AS seller_first, u.lastname AS seller_last
               FROM cart c
               JOIN books b ON c.book_id = b.book_id
@@ -67,28 +67,66 @@ if (empty($cartItems)) {
     exit();
 }
 
+$hasRental = false;
+foreach($cartItems as $item) {
+    if($item['purchase_type'] === 'rent') {
+        $hasRental = true;
+        break;
+    }
+}
+
 // Handle Order Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $firstName = trim($_POST['first_name'] ?? '');
     $lastName = trim($_POST['last_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
-    $address = trim($_POST['address'] ?? '');
-    $city = trim($_POST['city'] ?? '');
-    $postalCode = trim($_POST['postal_code'] ?? '');
-    $handoverMethod = $_POST['handover_method'] ?? 'pickup';
+    // Address fields removed, set to empty or default
+    $address = 'Meet-up';
+    $city = '';
+    $postalCode = '';
+    $handoverMethod = 'pickup';
     $paymentMethod = $_POST['payment_method'] ?? 'qrph';
     $refundMobile = trim($_POST['refund_mobile'] ?? '');
     $userNotes = trim($_POST['notes'] ?? '');
     
     // Basic validation
-    if (empty($firstName) || empty($lastName) || empty($phone) || empty($address) || empty($city)) {
-        $_SESSION['checkout_error'] = "Please fill in all required shipping fields.";
+    if (empty($firstName) || empty($lastName) || empty($phone)) {
+        $_SESSION['checkout_error'] = "Please fill in all required contact fields.";
         header("Location: checkout.php");
         exit();
     }
     
-    $shippingFee = ($handoverMethod === 'delivery') ? 60.00 : 0.00;
+    // Handle ID Upload for Rentals
+    if ($hasRental && (!isset($userData['id_verified_status']) || $userData['id_verified_status'] !== 'verified')) {
+        if (isset($_FILES['valid_id']) && $_FILES['valid_id']['error'] === UPLOAD_ERR_OK) {
+            $uploadDir = 'uploads/ids/';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            $fileExt = strtolower(pathinfo($_FILES['valid_id']['name'], PATHINFO_EXTENSION));
+            $fileName = 'id_' . $userId . '_' . time() . '.' . $fileExt;
+            $targetFilePath = $uploadDir . $fileName;
+            
+            if (move_uploaded_file($_FILES['valid_id']['tmp_name'], $targetFilePath)) {
+                $updateIdStmt = $conn->prepare("UPDATE users SET id_verified_status = 'pending', id_image_path = ? WHERE id = ?");
+                $updateIdStmt->bind_param("si", $targetFilePath, $userId);
+                $updateIdStmt->execute();
+            } else {
+                $_SESSION['checkout_error'] = "Failed to upload ID. Please try again.";
+                header("Location: checkout.php");
+                exit();
+            }
+        } else {
+            if (!isset($userData['id_verified_status']) || $userData['id_verified_status'] === 'unverified' || empty($userData['id_image_path'])) {
+                 $_SESSION['checkout_error'] = "A valid ID is required for book rentals.";
+                 header("Location: checkout.php");
+                 exit();
+            }
+        }
+    }
+    
+    $shippingFee = 0.00;
     $grandTotal = $subtotal + $totalDeposit + $shippingFee;
     
     // Payment Status & Reference logic
@@ -419,7 +457,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
 
-        <form id="checkoutForm" action="checkout.php" method="POST">
+        <form id="checkoutForm" action="checkout.php" method="POST" enctype="multipart/form-data">
             <div class="row g-3">
                 
                 <!-- Left Column -->
@@ -452,51 +490,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                        value="<?php echo htmlspecialchars($userData['email'] ?? ''); ?>" required>
                             </div>
                             
-                            <div class="col-12">
-                                <label class="form-label" for="address">Address</label>
-                                <input type="text" class="form-control" id="address" name="address" placeholder="Room/Unit, Street, Barangay"
-                                       value="<?php echo htmlspecialchars($userData['address'] ?? ''); ?>" required>
-                            </div>
-                            
-                            <div class="col-7">
-                                <label class="form-label" for="city">City</label>
-                                <input type="text" class="form-control" id="city" name="city" 
-                                       value="<?php echo htmlspecialchars($userData['city'] ?? ''); ?>" required>
-                            </div>
-                            <div class="col-5">
-                                <label class="form-label" for="postal_code">Postal Code</label>
-                                <input type="text" class="form-control" id="postal_code" name="postal_code" 
-                                       value="<?php echo htmlspecialchars($userData['postal_code'] ?? ''); ?>" required>
+                            <div class="col-12 mt-3 text-muted" style="font-size: 0.8rem;">
+                                <i class="fa-solid fa-circle-info me-1"></i> Delivery address is not required as all transactions are peer-to-peer meet-ups at the seller's designated location.
                             </div>
                         </div>
                     </div>
-
-                    <!-- 2. Handover Method -->
-                    <div class="checkout-box">
-                        <div class="checkout-box-title">2. Handover Method</div>
+                    
+                    <?php if ($hasRental && (!isset($userData['id_verified_status']) || $userData['id_verified_status'] !== 'verified')): ?>
+                    <!-- ID Verification (Mandatory for renters) -->
+                    <div class="checkout-box border-warning" style="background-color: #fffbeb;">
+                        <div class="checkout-box-title text-warning-emphasis">
+                            <i class="fa-solid fa-id-card me-2"></i> ID Verification Required
+                        </div>
+                        <div class="text-dark mb-3" style="font-size: 0.85rem;">
+                            Since your cart contains rental items, you must upload a valid Student or Government ID. This is a one-time process.
+                        </div>
                         
-                        <label class="option-item active" id="label-pickup">
-                            <div class="option-left">
-                                <input type="radio" name="handover_method" value="pickup" checked onchange="updateShipping(0, this)">
-                                <div>
-                                    <div class="option-name">Campus Meet-up / Pick-up</div>
-                                    <small class="text-muted" style="font-size: 0.75rem;">Meet with owner on campus</small>
-                                </div>
+                        <?php if (isset($userData['id_verified_status']) && $userData['id_verified_status'] === 'pending'): ?>
+                            <div class="alert alert-info py-2" style="font-size: 0.85rem;">
+                                <i class="fa-solid fa-clock me-1"></i> Your ID verification is currently pending approval. You may proceed with checkout.
                             </div>
-                            <div class="option-price text-success">Free</div>
-                        </label>
-
-                        <label class="option-item" id="label-delivery">
-                            <div class="option-left">
-                                <input type="radio" name="handover_method" value="delivery" onchange="updateShipping(60, this)">
-                                <div>
-                                    <div class="option-name">Standard Delivery</div>
-                                    <small class="text-muted" style="font-size: 0.75rem;">Courier to your address</small>
-                                </div>
+                        <?php else: ?>
+                            <div class="mb-2">
+                                <label class="form-label" for="valid_id">Upload Valid ID Image <span class="text-danger">*</span></label>
+                                <input type="file" class="form-control" id="valid_id" name="valid_id" accept="image/*" required>
+                                <div class="form-text" style="font-size: 0.75rem;">Accepted formats: JPG, PNG. Max size 5MB.</div>
                             </div>
-                            <div class="option-price">+ ₱60.00</div>
-                        </label>
+                        <?php endif; ?>
                     </div>
+                    <?php endif; ?>
 
                     <!-- 3. Payment Method -->
                     <div class="checkout-box">
@@ -513,15 +535,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <span class="badge bg-light text-dark border" style="font-size: 0.7rem;">Demo</span>
                         </label>
 
-                        <label class="option-item" id="label-pay-cod">
-                            <div class="option-left">
-                                <input type="radio" name="payment_method" value="cod" onchange="selectPaymentMethod('cod', this)">
-                                <div>
-                                    <div class="option-name">Cash on Delivery / Meet-up</div>
-                                    <small class="text-muted" style="font-size: 0.75rem;">Pay cash in person</small>
-                                </div>
-                            </div>
-                        </label>
+                        <!-- Removed Cash on Delivery (COD) as requested -->
 
                         <label class="option-item" id="label-pay-bank">
                             <div class="option-left">
@@ -557,6 +571,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             <?php echo ($item['purchase_type'] === 'rent') ? 'Rent (' . (int)$item['rental_weeks'] . ' wks)' : 'Buy'; ?> 
                                             × <?php echo (int)$item['quantity']; ?>
                                         </div>
+                                        <div class="text-muted" style="font-size: 0.70rem;">
+                                            <i class="fa-solid fa-location-dot me-1"></i> Meet: <?php echo htmlspecialchars($item['meetup_location'] ?? 'Campus Meet-up'); ?>
+                                        </div>
                                     </div>
                                     <div class="fw-semibold">₱<?php echo number_format($item['computed_line_total'], 2); ?></div>
                                 </div>
@@ -577,8 +594,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <?php endif; ?>
 
                         <div class="summary-row">
-                            <span>Delivery</span>
-                            <span class="fw-semibold" id="shippingDisplay">Free</span>
+                            <span>Handover</span>
+                            <span class="fw-semibold text-success">Free (Meet-up)</span>
                         </div>
 
                         <div class="summary-row total">
@@ -659,17 +676,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         let selectedPayment = 'qrph';
 
         function updateShipping(cost, radioEl) {
-            currentShipping = cost;
-            
-            document.querySelectorAll('input[name="handover_method"]').forEach(el => {
-                el.closest('.option-item').classList.remove('active');
-            });
-            radioEl.closest('.option-item').classList.add('active');
-
-            const grandTotal = subtotal + totalDeposit + currentShipping;
-            document.getElementById('shippingDisplay').textContent = cost === 0 ? 'Free' : '+ ₱' + cost.toFixed(2);
-            document.getElementById('grandTotalDisplay').textContent = '₱' + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            document.getElementById('modalTotalAmount').textContent = '₱' + grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            // Unused since handover method selector was removed
         }
 
         function selectPaymentMethod(method, radioEl) {

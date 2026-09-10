@@ -139,6 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $rent_price = floatval($_POST['rent_price'] ?? 0);
             $stock = max(1, intval($_POST['stock'] ?? 1));
             $description = mysqli_real_escape_string($conn, $_POST['description'] ?? '');
+            $meetup_location = mysqli_real_escape_string($conn, trim($_POST['meetup_location'] ?? 'Campus Meet-up'));
             $seller_note = mysqli_real_escape_string($conn, $_POST['seller_note'] ?? '');
             
             // Pricing strategy fields
@@ -160,11 +161,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             
             // Insert book into database with all fields
-            $query = "INSERT INTO books (user_id, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage, listing_type, security_deposit, seller_note) 
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $query = "INSERT INTO books (user_id, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage, listing_type, security_deposit, seller_note, meetup_location) 
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             $stmt = $conn->prepare($query);
-            $stmt->bind_param("isssssssssddissddddddsds", 
+            $stmt->bind_param("isssssssssddissddddddsdss", 
                 $userId, 
                 $title, 
                 $author, 
@@ -188,7 +189,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $markup_percentage,
                 $listing_type,
                 $security_deposit,
-                $seller_note);
+                $seller_note,
+                $meetup_location);
             
             if ($stmt->execute()) {
                 $new_book_id = $stmt->insert_id;
@@ -258,6 +260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $rent_price = floatval($_POST['rent_price']);
                     $stock = intval($_POST['stock']);
                     $description = mysqli_real_escape_string($conn, $_POST['description'] ?? '');
+                    $meetup_location = mysqli_real_escape_string($conn, trim($_POST['meetup_location'] ?? 'Campus Meet-up'));
                     
                     // Add debugging to check the description value
                     error_log("Description before DB update: " . $description);
@@ -290,28 +293,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                   book_type = ?, `condition` = ?, damages = ?, popularity = ?, 
                                   price = ?, rent_price = ?, stock = ?, description = ?, cover_image = ?,
                                   base_rental_fee = ?, handling_fee = ?, condition_multiplier = ?,
-                                  book_value = ?, listing_fee = ?, markup_percentage = ? 
+                                  book_value = ?, listing_fee = ?, markup_percentage = ?, meetup_location = ?
                                   WHERE book_id = ? AND user_id = ?";
                         $stmt = $conn->prepare($query);
-                        $stmt->bind_param("sssssssssddissdddddiii", $title, $author, $isbn, $genre, $theme, 
+                        $stmt->bind_param("sssssssssddissdddddssii", $title, $author, $isbn, $genre, $theme, 
                                           $book_type, $condition, $damages, $popularity, 
                                           $price, $rent_price, $stock, $description, $cover_image,
                                           $base_rental_fee, $handling_fee, $condition_multiplier,
-                                          $book_value, $listing_fee, $markup_percentage,
+                                          $book_value, $listing_fee, $markup_percentage, $meetup_location,
                                           $book_id, $userId);
                     } else {
                         $query = "UPDATE books SET title = ?, author = ?, ISBN = ?, genre = ?, theme = ?, 
                                   book_type = ?, `condition` = ?, damages = ?, popularity = ?, 
                                   price = ?, rent_price = ?, stock = ?, description = ?,
                                   base_rental_fee = ?, handling_fee = ?, condition_multiplier = ?,
-                                  book_value = ?, listing_fee = ?, markup_percentage = ? 
+                                  book_value = ?, listing_fee = ?, markup_percentage = ?, meetup_location = ?
                                   WHERE book_id = ? AND user_id = ?";
                         $stmt = $conn->prepare($query);
-                        $stmt->bind_param("sssssssssddisdddddiii", $title, $author, $isbn, $genre, $theme, 
+                        $stmt->bind_param("sssssssssddisdddddssii", $title, $author, $isbn, $genre, $theme, 
                                          $book_type, $condition, $damages, $popularity, 
                                          $price, $rent_price, $stock, $description,
                                          $base_rental_fee, $handling_fee, $condition_multiplier,
-                                         $book_value, $listing_fee, $markup_percentage,
+                                         $book_value, $listing_fee, $markup_percentage, $meetup_location,
                                          $book_id, $userId);
                     }
                     
@@ -1536,6 +1539,11 @@ while ($row = $theme_result->fetch_assoc()) {
                                     </div>
                                 </div>
                                 <div class="col-md-8">
+                                    <div class="p-3 bg-light rounded-3 border mb-3">
+                                        <label for="meetup_location" class="form-label fw-bold text-dark">Designated Meet-up Location <span class="text-danger">*</span></label>
+                                        <input type="text" class="form-control" id="meetup_location" name="meetup_location" placeholder="e.g. Main Library Entrance, Student Center Area" required>
+                                        <small class="text-muted mt-1 d-block">Where buyers/renters can meet you to get the book</small>
+                                    </div>
                                     <div class="p-3 bg-light rounded-3 border">
                                         <label for="seller_note" class="form-label fw-bold text-dark">Seller Note & Lending Guidelines <small class="text-muted fw-normal">(Optional)</small></label>
                                         <textarea class="form-control" id="seller_note" name="seller_note" rows="2" placeholder="e.g. Kept in smoke-free home, comes with clear plastic cover. Please avoid liquid spills."></textarea>
@@ -1715,6 +1723,10 @@ while ($row = $theme_result->fetch_assoc()) {
                                     <input type="hidden" name="popularity" id="edit_popularity">
                                 </div>
                                 <div class="col-12">
+                                    <div class="mb-3">
+                                        <label for="edit_meetup_location" class="form-label">Meet-up Location</label>
+                                        <input type="text" class="form-control" id="edit_meetup_location" name="meetup_location" placeholder="e.g. Main Library Entrance" required>
+                                    </div>
                                     <div class="mb-3">
                                         <label for="edit_description" class="form-label">Description</label>
                                         <textarea class="form-control" id="edit_description" name="description" rows="3" required></textarea>
@@ -1962,6 +1974,7 @@ while ($row = $theme_result->fetch_assoc()) {
                             document.getElementById('edit_price').value = book.price;
                             document.getElementById('edit_rent_price').value = book.rent_price || 0;
                             document.getElementById('edit_stock').value = book.stock;
+                            document.getElementById('edit_meetup_location').value = book.meetup_location || 'Campus Meet-up';
                             document.getElementById('edit_description').value = book.description;
                             
                             // Calculate pricing strategy fields based on existing prices

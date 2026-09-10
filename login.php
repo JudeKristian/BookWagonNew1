@@ -18,7 +18,7 @@ require_once 'google_config.php';
 
 // --- ACCOUNT LOCKOUT LOGIC ---
 $max_attempts = 3;
-$lockout_time = 300; // 5 minutes in seconds
+$lockout_time = 900; // 15 minutes in seconds
 $login_err = "";
 
 if (isset($_SESSION['login_attempts']) && $_SESSION['login_attempts'] >= $max_attempts) {
@@ -409,6 +409,9 @@ $conn->close();
                     <h2>Sign In</h2>
                     
                     <?php 
+                    if(isset($_GET['timeout']) && $_GET['timeout'] == 1) {
+                        echo '<div class="alert alert-warning fw-bold text-center">Your session has expired due to 10 minutes of inactivity. Please log in again.</div>';
+                    }
                     if(!empty($login_err)){
                         echo '<div class="alert alert-danger fw-bold text-center">' . $login_err . '</div>';
                     }        

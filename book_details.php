@@ -704,8 +704,8 @@ if (!empty($raw_damages) && strtolower($raw_damages) !== 'none') {
 
                     <!-- Service Notes (Matching reference express delivery & collect in store) -->
                     <div class="editorial-service-note">
-                        <i class="fa-solid fa-truck-fast"></i>
-                        <span>Direct dispatch by seller <strong><?php echo htmlspecialchars($book['firstname'] . ' ' . $book['lastname']); ?></strong>. Davao City pickup available.</span>
+                        <i class="fa-solid fa-handshake"></i>
+                        <span>Direct dispatch by seller <strong><?php echo htmlspecialchars($book['firstname'] . ' ' . $book['lastname']); ?></strong>. Meet up at: <strong><?php echo htmlspecialchars($book['meetup_location'] ?? 'Campus Meet-up'); ?></strong>.</span>
                     </div>
                     <div class="editorial-service-note">
                         <i class="fa-solid fa-shield-halved"></i>
@@ -756,6 +756,10 @@ if (!empty($raw_damages) && strtolower($raw_damages) !== 'none') {
                                 <div class="editorial-spec-row">
                                     <span class="editorial-spec-key">Stock Availability</span>
                                     <span class="editorial-spec-val"><?php echo $stock; ?> available copy</span>
+                                </div>
+                                <div class="editorial-spec-row">
+                                    <span class="editorial-spec-key">Meet-up Location</span>
+                                    <span class="editorial-spec-val fw-bold text-dark"><?php echo htmlspecialchars($book['meetup_location'] ?? 'Campus Meet-up'); ?></span>
                                 </div>
                                 <div class="editorial-spec-row">
                                     <span class="editorial-spec-key">Genres</span>
