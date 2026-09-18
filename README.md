@@ -5,11 +5,38 @@
 
 ---
 
-## 📖 1. Project Overview
+## 📖 1. Project Overview & How BookWagon Works
 
-**BookWagon** is a comprehensive, multi-role web-based marketplace engineered in native PHP and MySQL designed to promote sustainable reading through book rentals with escrow protection, direct book resale, peer-to-peer (P2P) swapping, community book forums, and administrative moderation.
+**BookWagon** is a comprehensive, multi-role web-based marketplace engineered in native PHP and MariaDB/MySQL designed to promote sustainable reading and lower educational textbook costs through **book rentals with escrow protection**, **direct book resale**, **peer-to-peer (P2P) barter swapping**, **community reading forums**, and **administrative dispute moderation**.
 
-The platform incorporates full enterprise-grade security and assurance mechanisms aligned with **Information Assurance and Security 2 (IAS 2)** requirements, including multi-tier privilege separation, parameterized SQL execution, strict file upload validation, two-factor authentication, session fixation defenses, and autonomous database-level intrusion detection triggers.
+### 🌟 How the Platform Works (Core User Lifecycle)
+
+```
+       ┌────────────────────────────────────────────────────────────────────────┐
+       │                       THE BOOKWAGON LIFECYCLE                          │
+       │                                                                        │
+       │  [1. Discover]  Browse catalog with filters for Sale, Rent, or Barter   │
+       │        ↓                                                               │
+       │  [2. Escrow]    Renter pays Rental Fee + Security Deposit into Escrow   │
+       │        ↓                                                               │
+       │  [3. Meetup]    Seller uploads baseline photo; Buyer scans QR Code     │
+       │        ↓                                                               │
+       │  [4. Active]    Rental timer runs; system sends return due alerts       │
+       │        ↓                                                               │
+       │  [5. Return]    Seller inspects book -> 100% Deposit refunded to Renter│
+       │        ↓                                                               │
+       │  [6. Dispute]   If damaged: Admin arbitrates photos & disburses funds  │
+       └────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Dual-Role Identity:** Users can seamlessly toggle between **Customer/Buyer Mode** and **Seller Mode** from the navigation bar without logging into separate accounts.
+2. **Book Listings with Flexible Options:** Book owners can list books for **Outright Sale**, **Weekly Rental**, or **Both**, defining custom replacement security deposits and preferred campus meetup locations.
+3. **Escrow Financial Protection:** When renting, the system automatically calculates the weekly rental rate plus a refundable security deposit. Funds are held in platform escrow so owners are protected against damaged/lost books, and renters are protected against fraudulent charges.
+4. **Physical Meetup Double-Handshake:** During campus handovers, the seller uploads a real-time condition photo (`initial_condition_photo`), and the buyer verifies the book and scans a cryptographic QR code. This locks the active handover timestamp and eliminates pre-existing damage arguments.
+5. **Automated Return Settlement:** When the book is returned undamaged, the seller clicks "Approve Return", automatically refunding 100% of the security deposit to the renter's wallet and crediting rental earnings to the seller.
+6. **Administrative Dispute Arbitration:** If a book is returned damaged, the seller submits photographic evidence. If contested, administrators examine pre-handover vs post-return photos in `Admin/admin_disputes.php` to issue an impartial binding ruling.
+7. **Zero-Cash Book Barter (Swapping):** Readers can propose direct book-for-book trades, negotiate in private messaging, and coordinate exchanges without any money changing hands.
+8. **Autonomous Security & Intrusion Detection:** Any out-of-band database tampering (e.g. changing book prices or wallet balances directly in phpMyAdmin) triggers MariaDB engine triggers that immediately alert administrators via a `RISK` warning banner with remediation workflows.
 
 ---
 
