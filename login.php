@@ -88,7 +88,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && empty($login_err)) {
         
         // Check input errors before checking database
         if (empty($email_err) && empty($password_err)) {
-            $sql = "SELECT id, email, password, google2fa_secret, is_2fa_enabled, auth_provider FROM users WHERE email = ?";
+            $sql = "SELECT id, email, password, google2fa_secret, is_2fa_enabled, auth_provider, is_verified FROM users WHERE email = ?";
             
             if ($stmt = $conn->prepare($sql)) {
                 $stmt->bind_param("s", $param_email);
@@ -98,10 +98,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && empty($login_err)) {
                     $stmt->store_result();
                     
                     if ($stmt->num_rows == 1) {                    
-                        $stmt->bind_result($id, $email_db, $hashed_password, $google2fa_secret, $is_2fa_enabled, $auth_provider);
+                        $stmt->bind_result($id, $email_db, $hashed_password, $google2fa_secret, $is_2fa_enabled, $auth_provider, $is_verified);
                         if ($stmt->fetch()) {
                             if (password_verify($password, $hashed_password)) {
-                                // SUCCESSFUL LOGIN
+                                // Check Verification Status
+                                if ($is_verified == 0) {
+                                    $login_err = "Please verify your email address before logging in. Check your inbox and spam folder.";
+                                } else {
+                                    // SUCCESSFUL LOGIN
                                 
                                 // Handle Remember Me
                                 if (isset($_POST['remember_me'])) {
@@ -113,6 +117,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && empty($login_err)) {
                                 // Reset failed attempts
                                 $_SESSION['login_attempts'] = 0;
                                 unset($_SESSION['last_login_attempt']);
+                                
+                                // Regenerate session ID to prevent session fixation attacks
+                                session_regenerate_id(true);
                                 
                                 // Get user details
                                 $user_query = "SELECT firstname, lastname, usertype, login_count FROM users WHERE id = ?";
@@ -136,25 +143,36 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && empty($login_err)) {
                                     header("Location: verify_2fa.php");
                                     exit();
                                 } else {
-                                    // Direct Login (2FA Disabled)
+                                    // 2FA is NOT enabled - Direct Login
+                                    $prev_count = (int)($loginCount ?? 0);
+                                    $new_count = $prev_count + 1;
+                                    $update_stmt = $conn->prepare("UPDATE users SET login_count = ? WHERE id = ?");
+                                    $update_stmt->bind_param("ii", $new_count, $id);
+                                    $update_stmt->execute();
+                                    $update_stmt->close();
+
                                     $_SESSION['loggedin'] = true;
                                     $_SESSION['user_id'] = $id;
-                                    $_SESSION['id'] = $id;
                                     $_SESSION['email'] = $email_db;
                                     $_SESSION['user'] = $email_db;
                                     $_SESSION['firstname'] = $firstName;
                                     $_SESSION['lastname'] = $lastName;
                                     $_SESSION['usertype'] = $userType ?? 'user';
-                                    
-                                    $prev_count = $loginCount ?? 0;
-                                    $_SESSION['login_count'] = $prev_count + 1;
-                                    
-                                    // Increment login count
-                                    $update_stmt = $conn->prepare("UPDATE users SET login_count = login_count + 1 WHERE id = ?");
-                                    $update_stmt->bind_param("i", $id);
-                                    $update_stmt->execute();
-                                    $update_stmt->close();
-                                    
+                                    $_SESSION['login_count'] = $new_count;
+
+                                    // Clean up temp session vars
+                                    unset($_SESSION['pending_2fa_verification']);
+                                    unset($_SESSION['pending_2fa_setup']);
+                                    unset($_SESSION['temp_user_id']);
+                                    unset($_SESSION['temp_email']);
+                                    unset($_SESSION['temp_firstname']);
+                                    unset($_SESSION['temp_lastname']);
+                                    unset($_SESSION['temp_usertype']);
+                                    unset($_SESSION['temp_login_count']);
+                                    unset($_SESSION['temp_2fa_otp']);
+
+                                    log_activity($id, 'Login', 'User logged in successfully without 2FA.');
+
                                     // Log Login History
                                     $ip = $_SERVER['REMOTE_ADDR'];
                                     $ua = $_SERVER['HTTP_USER_AGENT'] ?? 'Unknown Device';
@@ -164,20 +182,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && empty($login_err)) {
                                         $hstmt->execute();
                                         $hstmt->close();
                                     }
-                                    
-                                    // Clean up temp vars just in case
-                                    unset($_SESSION["temp_user_id"], $_SESSION["temp_email"], $_SESSION["temp_firstname"], $_SESSION["temp_lastname"], $_SESSION["temp_usertype"], $_SESSION["temp_login_count"]);
-                                    
-                                    if ($prev_count === 0) {
-                                        header('Location: welcome.php');
-                                    } elseif (isset($_SESSION['redirect_after_login'])) {
+
+                                    if (isset($_SESSION['redirect_after_login'])) {
                                         $redirect = $_SESSION['redirect_after_login'];
                                         unset($_SESSION['redirect_after_login']);
                                         header("Location: " . $redirect);
+                                    } elseif ($userType === 'seller') {
+                                        header("Location: seller_dashboard.php");
                                     } else {
-                                        header('Location: home.php');
+                                        header("Location: home.php");
                                     }
                                     exit();
+                                }
                                 }
                             } else {
                                 // FAILED PASSWORD
@@ -409,6 +425,10 @@ $conn->close();
                     <h2>Sign In</h2>
                     
                     <?php 
+                    if(isset($_SESSION['signup_success'])) {
+                        echo '<div class="alert alert-success fw-bold text-center">' . $_SESSION['signup_success'] . '</div>';
+                        unset($_SESSION['signup_success']);
+                    }
                     if(isset($_GET['timeout']) && $_GET['timeout'] == 1) {
                         echo '<div class="alert alert-warning fw-bold text-center">Your session has expired due to 10 minutes of inactivity. Please log in again.</div>';
                     }

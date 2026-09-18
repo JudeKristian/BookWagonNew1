@@ -54,28 +54,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             // Create directory if it doesn't exist
             if (!file_exists($upload_dir)) {
-                mkdir($upload_dir, 0777, true);
+                mkdir($upload_dir, 0755, true);
             }
             
-            $temp_name = $_FILES['book_image']['tmp_name'];
-            $name = basename($_FILES['book_image']['name']);
-            $file_ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            
-            // Check if the file is an image
-            $allowed_exts = array('jpg', 'jpeg', 'png', 'gif');
-            
-            if(in_array($file_ext, $allowed_exts)) {
-                // Generate unique filename
-                $new_filename = uniqid('book_') . '.' . $file_ext;
-                $destination = $upload_dir . $new_filename;
-                
-                if(move_uploaded_file($temp_name, $destination)) {
-                    $bookImage = $destination;
-                } else {
-                    $_SESSION['error_message'] = "Failed to upload image";
-                }
+            $maxFileSize = 5 * 1024 * 1024; // 5MB limit
+            if ($_FILES['book_image']['size'] > $maxFileSize) {
+                $_SESSION['error_message'] = "Book image exceeds the maximum allowed size of 5MB.";
             } else {
-                $_SESSION['error_message'] = "Only JPG, JPEG, PNG & GIF files are allowed";
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mimeType = finfo_file($finfo, $_FILES['book_image']['tmp_name']);
+                finfo_close($finfo);
+
+                $allowed_exts = array('jpg', 'jpeg', 'png', 'webp', 'gif');
+                $allowed_mimes = array('image/jpeg', 'image/png', 'image/webp', 'image/gif');
+                $file_ext = strtolower(pathinfo($_FILES['book_image']['name'], PATHINFO_EXTENSION));
+                
+                if(in_array($mimeType, $allowed_mimes) && in_array($file_ext, $allowed_exts)) {
+                    // Generate unique filename
+                    $new_filename = 'book_' . bin2hex(random_bytes(8)) . '.' . $file_ext;
+                    $destination = $upload_dir . $new_filename;
+                    
+                    if(move_uploaded_file($_FILES['book_image']['tmp_name'], $destination)) {
+                        chmod($destination, 0644);
+                        $bookImage = $destination;
+                    } else {
+                        $_SESSION['error_message'] = "Failed to upload image";
+                    }
+                } else {
+                    $_SESSION['error_message'] = "Only JPG, JPEG, PNG, WEBP & GIF files are allowed";
+                }
             }
         }
         
@@ -122,7 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $author = trim($_POST['author']);
         $collectionType = $_POST['collection_type'];
         $notes = trim($_POST['notes']);
-        $currentImage = $_POST['current_image'];
+        $currentImage = $_POST['current_image'] ?? '';
         
         // Handle image upload if provided
         if(isset($_FILES['book_image']) && $_FILES['book_image']['error'] == 0) {
@@ -130,32 +137,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             // Create directory if it doesn't exist
             if (!file_exists($upload_dir)) {
-                mkdir($upload_dir, 0777, true);
+                mkdir($upload_dir, 0755, true);
             }
             
-            $temp_name = $_FILES['book_image']['tmp_name'];
-            $name = basename($_FILES['book_image']['name']);
-            $file_ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            
-            // Check if the file is an image
-            $allowed_exts = array('jpg', 'jpeg', 'png', 'gif');
-            
-            if(in_array($file_ext, $allowed_exts)) {
-                // Generate unique filename
-                $new_filename = uniqid('book_') . '.' . $file_ext;
-                $destination = $upload_dir . $new_filename;
-                
-                if(move_uploaded_file($temp_name, $destination)) {
-                    // Delete old image if exists and not default
-                    if(!empty($currentImage) && file_exists($currentImage) && $currentImage != 'images/default-book.jpg') {
-                        unlink($currentImage);
-                    }
-                    $currentImage = $destination;
-                } else {
-                    $_SESSION['error_message'] = "Failed to upload image";
-                }
+            $maxFileSize = 5 * 1024 * 1024; // 5MB limit
+            if ($_FILES['book_image']['size'] > $maxFileSize) {
+                $_SESSION['error_message'] = "Book image exceeds the maximum allowed size of 5MB.";
             } else {
-                $_SESSION['error_message'] = "Only JPG, JPEG, PNG & GIF files are allowed";
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mimeType = finfo_file($finfo, $_FILES['book_image']['tmp_name']);
+                finfo_close($finfo);
+
+                $allowed_exts = array('jpg', 'jpeg', 'png', 'webp', 'gif');
+                $allowed_mimes = array('image/jpeg', 'image/png', 'image/webp', 'image/gif');
+                $file_ext = strtolower(pathinfo($_FILES['book_image']['name'], PATHINFO_EXTENSION));
+                
+                if(in_array($mimeType, $allowed_mimes) && in_array($file_ext, $allowed_exts)) {
+                    // Generate unique filename
+                    $new_filename = 'book_' . bin2hex(random_bytes(8)) . '.' . $file_ext;
+                    $destination = $upload_dir . $new_filename;
+                    
+                    if(move_uploaded_file($_FILES['book_image']['tmp_name'], $destination)) {
+                        chmod($destination, 0644);
+                        // Delete old image only if it's within uploads/book_images/ and not default
+                        if(!empty($currentImage) && strpos($currentImage, '..') === false && strpos($currentImage, 'uploads/book_images/') === 0 && file_exists($currentImage) && $currentImage != 'images/default-book.jpg') {
+                            unlink($currentImage);
+                        }
+                        $currentImage = $destination;
+                    } else {
+                        $_SESSION['error_message'] = "Failed to upload image";
+                    }
+                } else {
+                    $_SESSION['error_message'] = "Only JPG, JPEG, PNG, WEBP & GIF files are allowed";
+                }
             }
         }
         

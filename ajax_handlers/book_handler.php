@@ -1,22 +1,25 @@
-<artifact type="application/vnd.ant.code" language="php">
-```php
 <?php
-// book_handler.php
+// ajax_handlers/book_handler.php
 include("../session.php");
 include("../connect.php");
+
 header('Content-Type: application/json');
+
 $response = [
-'available' => false,
-'stock' => 0,
-'message' => ''
+    'available' => false,
+    'stock'     => 0,
+    'message'   => ''
 ];
+
+$action = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-$action = $_POST['action'] ?? '';
+    $action = $_POST['action'] ?? '';
 }
+
 try {
     switch ($action) {
         case 'check_availability':
-            $bookId = $_POST['book_id'] ?? 0;
+            $bookId = intval($_POST['book_id'] ?? 0);
 
             // Check book availability
             $stmt = $conn->prepare("SELECT stock FROM books WHERE book_id = ?");
@@ -27,7 +30,7 @@ try {
             if ($result->num_rows > 0) {
                 $bookData = $result->fetch_assoc();
                 $response['available'] = $bookData['stock'] > 0;
-                $response['stock'] = $bookData['stock'];
+                $response['stock'] = (int)$bookData['stock'];
                 $response['message'] = $response['available'] 
                     ? "Book is available" 
                     : "Book is out of stock";
@@ -37,7 +40,7 @@ try {
             break;
 
         case 'get_pricing':
-            $bookId = $_POST['book_id'] ?? 0;
+            $bookId = intval($_POST['book_id'] ?? 0);
             $purchaseType = $_POST['purchase_type'] ?? 'buy';
 
             $stmt = $conn->prepare("SELECT price, rent_price FROM books WHERE book_id = ?");
@@ -61,4 +64,6 @@ try {
     $response['success'] = false;
     $response['message'] = 'An unexpected error occurred: ' . $e->getMessage();
 }
-</artifact>
+
+echo json_encode($response);
+exit();

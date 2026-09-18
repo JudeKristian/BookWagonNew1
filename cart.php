@@ -577,9 +577,16 @@ $_SESSION['cart_details'] = [
                     <!-- Cart Items Column -->
                     <div class="col-lg-8">
                         <div class="cart-container">
+                            <div class="d-flex align-items-center mb-3 px-2">
+                                <input class="form-check-input me-2 mt-0" type="checkbox" id="selectAllCart" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                <label class="form-check-label fw-semibold" for="selectAllCart" style="cursor: pointer;">Select All Items</label>
+                            </div>
                             <?php foreach ($cartItems as $item): ?>
-                            <div class="cart-item">
-                                <div class="d-flex gap-3">
+                            <div class="cart-item" data-buy-price="<?php echo $item['price']; ?>" data-rent-price="<?php echo $item['rent_price']; ?>">
+                                <div class="d-flex gap-3 align-items-start">
+                                    <div class="mt-4">
+                                        <input class="form-check-input cart-item-checkbox" type="checkbox" name="selected_items[]" value="<?php echo $item['cart_id']; ?>" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                    </div>
                                     <div class="cart-item-image-wrapper">
                                         <img src="<?php echo htmlspecialchars($item['cover_image']); ?>" 
                                              alt="<?php echo htmlspecialchars($item['title']); ?>" 
@@ -713,9 +720,11 @@ $_SESSION['cart_details'] = [
                                 <span id="summaryTotal" class="text-dark">₱<?php echo number_format($total, 2); ?></span>
                             </div>
                             
-                            <a href="checkout.php" class="checkout-button <?php echo empty($cartItems) ? 'disabled' : ''; ?>">
-                                Checkout
-                            </a>
+                            <form id="checkoutFormAction" action="checkout.php" method="POST">
+                                <button type="button" class="checkout-button <?php echo empty($cartItems) ? 'disabled' : ''; ?>" id="btnCheckout">
+                                    Checkout
+                                </button>
+                            </form>
 
                             <div class="text-muted small mt-3 text-center" style="font-size: 0.8rem;">
                                 <i class="fas fa-shield-alt text-success me-1"></i> Secure payment & COD available
@@ -758,18 +767,18 @@ $_SESSION['cart_details'] = [
                 // Get price values (stored as data attributes or find them in the UI)
                 let itemPrice = 0;
                 if (purchaseType === 'buy') {
-                    // Get buy price from the UI
-                    const buyPriceText = item.querySelector('.purchase-option[data-type="buy"]').textContent;
-                    itemPrice = parseFloat(buyPriceText.replace(/[^\d.]/g, ''));
+                    itemPrice = parseFloat(item.getAttribute('data-buy-price'));
                 } else {
-                    // Get rent price from the UI
-                    const rentPriceText = item.querySelector('.purchase-option[data-type="rent"]').textContent;
-                    const weeklyPrice = parseFloat(rentPriceText.replace(/[^\d.]/g, ''));
+                    const weeklyPrice = parseFloat(item.getAttribute('data-rent-price'));
                     const rentalWeeks = parseInt(item.querySelector('select[name="rental_weeks"]').value);
                     itemPrice = weeklyPrice * rentalWeeks;
                 }
                 
-                subtotal += itemPrice * quantity;
+                // Only calculate if checkbox is checked
+                const isChecked = item.querySelector('.cart-item-checkbox').checked;
+                if (isChecked) {
+                    subtotal += itemPrice * quantity;
+                }
             });
             
             // Calculate total (no tax, no shipping fee now)
@@ -793,6 +802,72 @@ $_SESSION['cart_details'] = [
                 mobileSummary.querySelector('.cart-summary-row span:last-child').textContent = 
                     `₱${subtotal.toFixed(2)}`;
             }
+            
+            // Disable checkout if 0 items selected
+            const checkedCount = document.querySelectorAll('.cart-item-checkbox:checked').length;
+            const btnCheckout = document.getElementById('btnCheckout');
+            if (btnCheckout) {
+                if (checkedCount === 0) {
+                    btnCheckout.classList.add('disabled');
+                } else {
+                    btnCheckout.classList.remove('disabled');
+                }
+            }
+        }
+        
+        // Checkbox Handlers
+        const selectAllCb = document.getElementById('selectAllCart');
+        const itemCbs = document.querySelectorAll('.cart-item-checkbox');
+        
+        if (selectAllCb) {
+            selectAllCb.addEventListener('change', function() {
+                itemCbs.forEach(cb => {
+                    cb.checked = this.checked;
+                });
+                recalculateCart();
+            });
+        }
+        
+        itemCbs.forEach(cb => {
+            cb.addEventListener('change', function() {
+                if (!this.checked && selectAllCb) {
+                    selectAllCb.checked = false;
+                }
+                const allChecked = Array.from(itemCbs).every(c => c.checked);
+                if (allChecked && selectAllCb) {
+                    selectAllCb.checked = true;
+                }
+                recalculateCart();
+            });
+        });
+
+        // Handle Checkout Form Submission
+        const btnCheckout = document.getElementById('btnCheckout');
+        if (btnCheckout) {
+            btnCheckout.addEventListener('click', function() {
+                if (this.classList.contains('disabled')) return;
+                
+                const form = document.getElementById('checkoutFormAction');
+                // Remove existing hidden inputs to avoid duplicates
+                form.querySelectorAll('.selected-input').forEach(el => el.remove());
+                
+                let hasItems = false;
+                itemCbs.forEach(cb => {
+                    if (cb.checked) {
+                        const input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'selected_items[]';
+                        input.value = cb.value;
+                        input.className = 'selected-input';
+                        form.appendChild(input);
+                        hasItems = true;
+                    }
+                });
+                
+                if (hasItems) {
+                    form.submit();
+                }
+            });
         }
         
         // Purchase type toggle handler

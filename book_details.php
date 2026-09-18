@@ -1,5 +1,5 @@
 <?php
-include("session.php");
+include("guest_session.php");
 include("connect.php");
 
 $userType = $_SESSION['usertype'] ?? '';
@@ -705,7 +705,11 @@ if (!empty($raw_damages) && strtolower($raw_damages) !== 'none') {
                     <!-- Service Notes (Matching reference express delivery & collect in store) -->
                     <div class="editorial-service-note">
                         <i class="fa-solid fa-handshake"></i>
-                        <span>Direct dispatch by seller <strong><?php echo htmlspecialchars($book['firstname'] . ' ' . $book['lastname']); ?></strong>. Meet up at: <strong><?php echo htmlspecialchars($book['meetup_location'] ?? 'Campus Meet-up'); ?></strong>.</span>
+                        <span>Direct dispatch by seller <strong><?php echo htmlspecialchars($book['firstname'] . ' ' . $book['lastname']); ?></strong>.</span>
+                    </div>
+                    <div class="editorial-service-note meetup-highlight" style="background-color: #fff3e0; padding: 15px; border-radius: 8px; border-left: 5px solid #ff9800; margin-top: 10px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                        <i class="fa-solid fa-location-dot" style="color: #ff9800; font-size: 1.4rem;"></i>
+                        <span style="font-size: 1.1rem; color: #333;"><strong>MEET UP AT:</strong> <span style="font-size: 1.2rem; font-weight: 800; color: #d84315; text-transform: uppercase;"><?php echo htmlspecialchars($book['meetup_location'] ?? 'Campus Meet-up'); ?></span></span>
                     </div>
                     <div class="editorial-service-note">
                         <i class="fa-solid fa-shield-halved"></i>

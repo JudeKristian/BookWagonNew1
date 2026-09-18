@@ -40,6 +40,32 @@ if (!isset($_FILES['book_image']) || $_FILES['book_image']['error'] !== UPLOAD_E
 }
 
 try {
+    // Validate uploaded file
+    $file = $_FILES['book_image'];
+    
+    // 1. Check size limit (max 5MB)
+    if ($file['size'] > 5 * 1024 * 1024) {
+        throw new Exception('Book image exceeds maximum allowed size of 5MB');
+    }
+    
+    // 2. Validate file extension
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if (!in_array($ext, $allowed_exts)) {
+        throw new Exception('Invalid file extension. Only JPG, JPEG, PNG, GIF, and WEBP are allowed');
+    }
+    
+    // 3. Validate real server-side MIME type
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    if ($finfo !== false) {
+        $mime = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+        $allowed_mimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!in_array($mime, $allowed_mimes)) {
+            throw new Exception('Invalid image file format');
+        }
+    }
+
     // Process the uploaded image
     $uploadDir = '../uploads/books/';
     
@@ -48,14 +74,15 @@ try {
         mkdir($uploadDir, 0777, true);
     }
     
-    // Generate a unique filename
-    $filename = uniqid() . '_' . basename($_FILES['book_image']['name']);
+    // Generate a unique filename using only the safe extension
+    $filename = uniqid('book_', true) . '.' . $ext;
     $uploadPath = $uploadDir . $filename;
     
     // Move the uploaded file
-    if (!move_uploaded_file($_FILES['book_image']['tmp_name'], $uploadPath)) {
+    if (!move_uploaded_file($file['tmp_name'], $uploadPath)) {
         throw new Exception('Failed to upload image');
     }
+    chmod($uploadPath, 0644);
     
     // Get the relative path for storage in database
     $relativePath = 'uploads/books/' . $filename;

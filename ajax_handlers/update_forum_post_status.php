@@ -40,7 +40,7 @@ if (!isset($_POST['status']) || empty($_POST['status'])) {
 
 // Sanitize and validate input
 $postId = (int)$_POST['post_id'];
-$status = $conn->real_escape_string($_POST['status']);
+$status = trim($_POST['status']);
 
 // Validate status value
 $validStatuses = ['active', 'closed', 'hidden'];
@@ -49,21 +49,32 @@ if (!in_array($status, $validStatuses)) {
 }
 
 // Check if post exists and user is the author
-$postCheck = $conn->query("SELECT user_id FROM forum_posts WHERE post_id = $postId");
-if ($postCheck->num_rows === 0) {
+$postStmt = $conn->prepare("SELECT user_id FROM forum_posts WHERE post_id = ?");
+$postStmt->bind_param("i", $postId);
+$postStmt->execute();
+$postRes = $postStmt->get_result();
+
+if ($postRes->num_rows === 0) {
+    $postStmt->close();
     sendResponse(false, 'Invalid post');
 }
 
-$postUserId = $postCheck->fetch_assoc()['user_id'];
-if ($postUserId != $userId) {
+$postRow = $postRes->fetch_assoc();
+$postStmt->close();
+
+if ($postRow['user_id'] != $userId) {
     sendResponse(false, 'You do not have permission to modify this post');
 }
 
-// Update the post status
-$updateQuery = "UPDATE forum_posts SET status = '$status' WHERE post_id = $postId";
+// Update the post status with prepared statement
+$updateStmt = $conn->prepare("UPDATE forum_posts SET status = ? WHERE post_id = ?");
+$updateStmt->bind_param("si", $status, $postId);
 
-if ($conn->query($updateQuery)) {
+if ($updateStmt->execute()) {
+    $updateStmt->close();
     sendResponse(true, 'Post status updated successfully');
 } else {
-    sendResponse(false, 'Failed to update post status: ' . $conn->error);
+    error_log("Failed to update post status: " . $updateStmt->error);
+    $updateStmt->close();
+    sendResponse(false, 'Failed to update post status. Please try again later.');
 } 

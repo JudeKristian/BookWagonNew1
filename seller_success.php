@@ -135,6 +135,43 @@ if ($userId) {
                 <a href="seller_dashboard.php" class="btn btn-primary-custom">
                     <i class="fa-solid fa-store me-2"></i> Go to Seller Dashboard
                 </a>
+            <?php elseif ($sellerStatus === 'rejected'): ?>
+                <div class="status-icon" style="color: #dc3545;">
+                    <i class="fa-solid fa-circle-xmark"></i>
+                </div>
+                <h3 class="fw-bold mb-2 text-danger">Application Not Approved</h3>
+                <p class="text-muted mb-4">
+                    Your seller application for <strong><?php echo htmlspecialchars($shopName ?: 'your store'); ?></strong> was reviewed and was not approved at this time.
+                </p>
+
+                <div class="steps-box border-danger-subtle bg-danger-subtle text-start p-3 mb-4 rounded-3" style="border-left: 4px solid #dc3545;">
+                    <h6 class="fw-bold text-danger mb-2">
+                        <i class="fa-solid fa-triangle-exclamation me-2"></i> Review Feedback & Requirements
+                    </h6>
+                    <p class="small text-danger-emphasis mb-2">Applications are typically declined due to one of the following reasons:</p>
+                    <ul class="small text-danger-emphasis mb-0 ps-3">
+                        <li class="mb-1"><strong>ID Verification:</strong> The uploaded Government ID was blurry, unreadable, expired, or missing the back page.</li>
+                        <li class="mb-1"><strong>Identity Match:</strong> The selfie photo did not clearly match the face on the provided identification.</li>
+                        <li class="mb-1"><strong>Payout Information:</strong> The full name entered did not match the registered name on your E-Wallet account.</li>
+                        <li><strong>Contact Details:</strong> Incomplete address or unverified business phone number.</li>
+                    </ul>
+                </div>
+
+                <p class="small text-muted mb-4">
+                    Don't worry! You can correct your information or upload clear documents and submit a new request.
+                </p>
+
+                <div class="d-flex flex-column flex-sm-row gap-2 justify-content-center">
+                    <a href="start_selling.php?reapply=1" class="btn btn-warning fw-semibold px-4 py-2 text-white shadow-sm" style="background-color: #f8a100; border-color: #f8a100;">
+                        <i class="fa-solid fa-rotate-right me-1"></i> Update Documents & Re-apply
+                    </a>
+                    <a href="mailto:support@bookwagon.com" class="btn btn-outline-secondary px-3 py-2">
+                        <i class="fa-solid fa-envelope me-1"></i> Contact Support
+                    </a>
+                    <a href="home.php" class="btn btn-outline-dark px-3 py-2">
+                        <i class="fa-solid fa-house me-1"></i> Back to Home
+                    </a>
+                </div>
             <?php else: ?>
                 <div class="status-icon pending">
                     <i class="fa-solid fa-clock-rotate-left"></i>

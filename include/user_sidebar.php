@@ -18,7 +18,11 @@ $sidebarUserId = $_SESSION['id'] ?? $_SESSION['user_id'] ?? null;
 
 // Optional: get live cart count if $conn is available
 $sidebarCartCount = 0;
+$sidebarRentedCount = 0;
+$sidebarOrderCount = 0;
+
 if (isset($conn) && $sidebarUserId) {
+    // Cart Count
     $cartStmt = $conn->prepare("SELECT SUM(quantity) as total FROM cart WHERE user_id = ?");
     if ($cartStmt) {
         $cartStmt->bind_param("i", $sidebarUserId);
@@ -26,6 +30,26 @@ if (isset($conn) && $sidebarUserId) {
         $cartRes = $cartStmt->get_result()->fetch_assoc();
         $sidebarCartCount = intval($cartRes['total'] ?? 0);
         $cartStmt->close();
+    }
+    
+    // Active Rentals Count
+    $rentStmt = $conn->prepare("SELECT COUNT(*) as total FROM book_rentals WHERE user_id = ? AND status IN ('active', 'overdue', 'return_pending', 'disputed')");
+    if ($rentStmt) {
+        $rentStmt->bind_param("i", $sidebarUserId);
+        $rentStmt->execute();
+        $rentRes = $rentStmt->get_result()->fetch_assoc();
+        $sidebarRentedCount = intval($rentRes['total'] ?? 0);
+        $rentStmt->close();
+    }
+
+    // Active Orders Count
+    $orderStmt = $conn->prepare("SELECT COUNT(*) as total FROM orders WHERE user_id = ? AND order_status IN ('pending', 'processing', 'shipped')");
+    if ($orderStmt) {
+        $orderStmt->bind_param("i", $sidebarUserId);
+        $orderStmt->execute();
+        $orderRes = $orderStmt->get_result()->fetch_assoc();
+        $sidebarOrderCount = intval($orderRes['total'] ?? 0);
+        $orderStmt->close();
     }
 }
 ?>
@@ -209,9 +233,12 @@ if (isset($conn) && $sidebarUserId) {
         <a href="rented_books.php" class="bw-nav-link <?php echo ($currentPage == 'rented_books.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-book"></i>
             <span>Rented Books</span>
+            <?php if ($sidebarRentedCount > 0): ?>
+                <span class="bw-nav-badge"><?php echo $sidebarRentedCount; ?></span>
+            <?php endif; ?>
         </a>
 
-        <a href="collections.php" class="bw-nav-link <?php echo ($currentPage == 'collections.php') ? 'active' : ''; ?>">
+        <a href="javascript:void(0);" onclick="alert('This feature is currently under development. Stay tuned for future updates!');" class="bw-nav-link <?php echo ($currentPage == 'collections.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-bookmark"></i>
             <span>My Collections</span>
         </a>
@@ -219,6 +246,9 @@ if (isset($conn) && $sidebarUserId) {
         <a href="history.php" class="bw-nav-link <?php echo ($currentPage == 'history.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-clock-rotate-left"></i>
             <span>Order History</span>
+            <?php if ($sidebarOrderCount > 0): ?>
+                <span class="bw-nav-badge"><?php echo $sidebarOrderCount; ?></span>
+            <?php endif; ?>
         </a>
 
         <div class="bw-sidebar-divider"></div>

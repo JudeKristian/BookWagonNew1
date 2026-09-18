@@ -1,6 +1,7 @@
 <?php
 include("session.php");
 include("connect.php");
+require_once "includes/audit_logger.php";
 
 // Ensure user is logged in
 if (!isset($_SESSION['id'])) {
@@ -156,15 +157,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         );
         $returnStmt->execute();
         
-        // Update the rental status to 'return_pending'
+        // Generate secure return token
+        $returnToken = bin2hex(random_bytes(16));
+        
+        // Update the rental status to 'return_pending' and save the token
         $updateRentalStmt = $conn->prepare("
             UPDATE book_rentals
             SET status = 'return_pending',
-                return_requested_date = NOW()
+                return_requested_date = NOW(),
+                return_token = ?
             WHERE rental_id = ? AND user_id = ?
         ");
-        $updateRentalStmt->bind_param("ii", $rentalId, $userId);
+        $updateRentalStmt->bind_param("sii", $returnToken, $rentalId, $userId);
         $updateRentalStmt->execute();
+        
+        log_activity($userId, 'Return Initiated', 'Buyer initiated return for Rental #' . $rentalId . ' via ' . $returnMethod);
         
         // Commit transaction
         $conn->commit();

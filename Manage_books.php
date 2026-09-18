@@ -2,29 +2,51 @@
 include("session.php");
 include("connect.php");
 
-// Direct upload function - no helper file needed
+// Secure upload function with strict validation
 function direct_upload_image($file, $upload_dir = 'uploads/covers/') {
+    if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) {
+        return false;
+    }
+    
     // Create directory if it doesn't exist
     if (!file_exists($upload_dir)) {
         mkdir($upload_dir, 0777, true);
     }
     
-    if ($file['error'] !== UPLOAD_ERR_OK) {
+    // 1. File size check (max 5MB)
+    $max_size = 5 * 1024 * 1024;
+    if ($file['size'] > $max_size) {
+        error_log("Upload error: File exceeds 5MB limit.");
         return false;
     }
     
-    // Generate unique filename
-    $filename = uniqid() . '_' . basename($file['name']);
+    // 2. Validate file extension
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if (!in_array($ext, $allowed_extensions)) {
+        error_log("Security Error: Invalid extension: " . $ext);
+        return false;
+    }
+    
+    // 3. Validate real server-side MIME type
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    if ($finfo !== false) {
+        $mime = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+        $allowed_mimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!in_array($mime, $allowed_mimes)) {
+            error_log("Security Error: Invalid MIME type: " . $mime);
+            return false;
+        }
+    }
+    
+    // 4. Generate random safe filename without preserving client basename
+    $filename = uniqid('book_', true) . '.' . $ext;
     $targetPath = $upload_dir . $filename;
     
-    // Check file type
-    $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-    if (!in_array($file['type'], $allowedTypes)) {
-        return false;
-    }
-    
-    // Move uploaded file
+    // 5. Move uploaded file and set safe permissions
     if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+        chmod($targetPath, 0644);
         return $targetPath;
     }
     
@@ -67,6 +89,12 @@ function ensure_pricing_fields_exist($conn) {
             $conn->query("ALTER TABLE books ADD COLUMN $field $definition");
             error_log("Added field $field to books table");
         }
+    }
+
+    // Existing books remain visible; newly submitted books require approval.
+    $approval_column = $conn->query("SHOW COLUMNS FROM books LIKE 'approval_status'");
+    if ($approval_column && $approval_column->num_rows === 0) {
+        $conn->query("ALTER TABLE books ADD COLUMN approval_status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved' AFTER user_id");
     }
 
     // Ensure genre and theme are wide enough for multi-tags
@@ -161,8 +189,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             
             // Insert book into database with all fields
-            $query = "INSERT INTO books (user_id, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage, listing_type, security_deposit, seller_note, meetup_location) 
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $query = "INSERT INTO books (user_id, approval_status, title, author, ISBN, genre, theme, book_type, `condition`, damages, popularity, price, rent_price, stock, description, cover_image, base_rental_fee, handling_fee, condition_multiplier, book_value, listing_fee, markup_percentage, listing_type, security_deposit, seller_note, meetup_location) 
+                      VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             $stmt = $conn->prepare($query);
             $stmt->bind_param("isssssssssddissddddddsdss", 
@@ -872,7 +900,21 @@ while ($row = $theme_result->fetch_assoc()) {
                                                     </td>
                                                     <td>
                                                         <div class="d-flex align-items-center">
-                                                            <img src="<?php echo !empty($book['cover_image']) ? $book['cover_image'] : 'img/default-book-cover.jpg'; ?>" 
+                                                            <?php
+                                                            $coverPath = 'images/default-book.png';
+                                                            if (!empty($book['cover_image'])) {
+                                                                if (file_exists($book['cover_image'])) {
+                                                                    $coverPath = $book['cover_image'];
+                                                                } elseif (file_exists('images/boooks/' . $book['cover_image'])) {
+                                                                    $coverPath = 'images/boooks/' . $book['cover_image'];
+                                                                } elseif (file_exists('uploads/covers/' . $book['cover_image'])) {
+                                                                    $coverPath = 'uploads/covers/' . $book['cover_image'];
+                                                                } elseif (file_exists('images/' . $book['cover_image'])) {
+                                                                    $coverPath = 'images/' . $book['cover_image'];
+                                                                }
+                                                            }
+                                                            ?>
+                                                            <img src="<?php echo htmlspecialchars($coverPath); ?>" 
                                                                  alt="<?php echo htmlspecialchars($book['title']); ?>" 
                                                                  class="book-thumbnail">
                                                             <div>
@@ -917,7 +959,11 @@ while ($row = $theme_result->fetch_assoc()) {
                                                         <?php endif; ?>
                                                     </td>
                                                     <td>
-                                                        <?php if ($book['stock'] > 0): ?>
+                                                        <?php if (($book['approval_status'] ?? 'approved') === 'pending'): ?>
+                                                            <span class="badge bg-warning text-dark">Pending</span>
+                                                        <?php elseif (($book['approval_status'] ?? 'approved') === 'rejected'): ?>
+                                                            <span class="badge bg-danger" title="Rejected by Admin">Rejected</span>
+                                                        <?php elseif ($book['stock'] > 0): ?>
                                                             <span class="badge bg-success">Active</span>
                                                         <?php else: ?>
                                                             <span class="badge bg-danger">Out of Stock</span>

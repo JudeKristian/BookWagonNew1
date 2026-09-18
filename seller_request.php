@@ -33,6 +33,21 @@ $result = $checkStmt->get_result();
 $hasPendingRequest = ($result->num_rows > 0);
 $isAlreadySeller = ($userType == 'seller');
 
+// Check if user has a rejected request
+$rejectedQuery = "SELECT *, created_at as applied_at FROM sellers WHERE user_id = ? AND status = 'rejected' ORDER BY created_at DESC LIMIT 1";
+$rejectedStmt = $conn->prepare($rejectedQuery);
+$rejectedStmt->bind_param("i", $userId);
+$rejectedStmt->execute();
+$rejectedResult = $rejectedStmt->get_result();
+$hasRejectedRequest = ($rejectedResult->num_rows > 0);
+$rejectedRow = $hasRejectedRequest ? $rejectedResult->fetch_assoc() : null;
+
+// Fetch the pending request details for display
+$pendingRow = null;
+if ($hasPendingRequest) {
+    $pendingRow = $result->fetch_assoc();
+}
+
 // Process form submission
 if ($_SERVER["REQUEST_METHOD"] == "POST" && !$hasPendingRequest && !$isAlreadySeller) {
     // If logo upload is requested
@@ -42,30 +57,40 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && !$hasPendingRequest && !$isAlreadySe
         
         // Create directory if it doesn't exist
         if (!file_exists($targetDir)) {
-            mkdir($targetDir, 0777, true);
+            mkdir($targetDir, 0755, true);
         }
         
         if(isset($_FILES["shop_logo"]) && $_FILES["shop_logo"]["error"] == 0) {
-            $fileName = basename($_FILES["shop_logo"]["name"]);
-            $targetFilePath = $targetDir . $userId . "_" . $fileName;
-            $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
-            
-            // Allow certain file formats
-            $allowTypes = array('jpg', 'png', 'jpeg', 'gif');
-            if(in_array(strtolower($fileType), $allowTypes)) {
-                // Upload file to server
-                if(move_uploaded_file($_FILES["shop_logo"]["tmp_name"], $targetFilePath)) {
-                    // Store the logo path in session for later use in business info page
-                    $_SESSION['temp_shop_logo'] = $targetFilePath;
-                    
-                    // Redirect to business information page
-                    header("Location: seller_business_info.php");
-                    exit();
-                } else {
-                    $errorMsg = "Sorry, there was an error uploading your file.";
-                }
+            $maxFileSize = 5 * 1024 * 1024; // 5MB limit
+            if ($_FILES["shop_logo"]["size"] > $maxFileSize) {
+                $errorMsg = "File exceeds the maximum allowed size of 5MB.";
             } else {
-                $errorMsg = "Sorry, only JPG, JPEG, PNG & GIF files are allowed.";
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mime = finfo_file($finfo, $_FILES["shop_logo"]["tmp_name"]);
+                finfo_close($finfo);
+
+                $allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                $fileExt = strtolower(pathinfo($_FILES["shop_logo"]["name"], PATHINFO_EXTENSION));
+                $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+                if (in_array($mime, $allowedMimes) && in_array($fileExt, $allowedExts)) {
+                    $safeName = "logo_" . intval($userId) . "_" . bin2hex(random_bytes(6)) . "." . $fileExt;
+                    $targetFilePath = $targetDir . $safeName;
+                    
+                    if (move_uploaded_file($_FILES["shop_logo"]["tmp_name"], $targetFilePath)) {
+                        chmod($targetFilePath, 0644);
+                        // Store the logo path in session for later use in business info page
+                        $_SESSION['temp_shop_logo'] = $targetFilePath;
+                        
+                        // Redirect to business information page
+                        header("Location: seller_business_info.php");
+                        exit();
+                    } else {
+                        $errorMsg = "Sorry, there was an error uploading your file.";
+                    }
+                } else {
+                    $errorMsg = "Sorry, only JPG, JPEG, PNG, GIF & WebP files are allowed.";
+                }
             }
         } else {
             $errorMsg = "Please select a file to upload.";
@@ -268,9 +293,32 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && !$hasPendingRequest && !$isAlreadySe
                     </div>
                     <div class="status-title">Request Pending</div>
                     <div class="status-message">
-                        You already have a pending seller application. We'll notify you once it's approved.
+                        Your seller application for <strong><?php echo htmlspecialchars($pendingRow['shop_name'] ?? 'your shop'); ?></strong> is currently under review.
+                        We'll notify you once it's been processed.
+                        <?php if($pendingRow): ?>
+                        <br><small class="text-muted">Submitted on <?php echo date('F j, Y', strtotime($pendingRow['created_at'])); ?></small>
+                        <?php endif; ?>
                     </div>
-                    <a href="dashboard.php" class="btn btn-primary">Return to Dashboard</a>
+                    <a href="home.php" class="btn btn-primary">Return to Home</a>
+                </div>
+            <?php elseif($hasRejectedRequest): ?>
+                <div class="status-card" style="border: 1px solid #f5c6cb; background-color: #fff5f5;">
+                    <div class="status-icon" style="color: #dc3545;">
+                        <i class="fas fa-times-circle"></i>
+                    </div>
+                    <div class="status-title" style="color: #dc3545;">Application Not Approved</div>
+                    <div class="status-message">
+                        Unfortunately, your seller application for <strong><?php echo htmlspecialchars($rejectedRow['shop_name'] ?? 'your shop'); ?></strong> was not approved at this time.
+                        <br><small class="text-muted">Reviewed on <?php echo date('F j, Y', strtotime($rejectedRow['created_at'])); ?></small>
+                    </div>
+                    <p class="text-muted" style="font-size: 14px; margin-bottom: 20px;">
+                        <i class="fas fa-info-circle me-1"></i>
+                        If you believe this is an error or would like to re-apply, please contact our support team.
+                    </p>
+                    <div class="d-flex gap-2 justify-content-center">
+                        <a href="home.php" class="btn btn-outline-secondary">Return to Home</a>
+                        <a href="mailto:support@bookwagon.com" class="btn btn-danger">Contact Support</a>
+                    </div>
                 </div>
             <?php else: ?>
                 <div class="notification-box mb-4">

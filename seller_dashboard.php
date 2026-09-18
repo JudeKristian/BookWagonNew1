@@ -15,21 +15,73 @@ if ($userType !== 'seller') {
 
 // Fetch basic seller stats
 $shopName = 'My Store';
-$sellerStmt = $conn->prepare("SELECT shop_name FROM sellers WHERE user_id = ?");
+$sellerId = 0;
+$sellerStmt = $conn->prepare("SELECT id, shop_name FROM sellers WHERE user_id = ?");
 if ($sellerStmt) {
     $sellerStmt->bind_param("i", $userId);
     $sellerStmt->execute();
     $sellerRes = $sellerStmt->get_result();
     if ($row = $sellerRes->fetch_assoc()) {
+        $sellerId = $row['id'];
         $shopName = $row['shop_name'];
     }
 }
 
-// Stats placeholders (In a real app, these would be queries)
+// Calculate Total Revenue (Rentals + Sales)
 $totalRevenue = 0;
+$stmt = $conn->prepare("SELECT SUM(total_price) as rental_earnings FROM book_rentals WHERE seller_id = ? AND status IN ('returned', 'completed')");
+$stmt->bind_param("i", $sellerId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $totalRevenue += floatval($row['rental_earnings']);
+
+$stmt = $conn->prepare("SELECT SUM(unit_price * quantity) as sales_earnings FROM order_items WHERE seller_id = ? AND purchase_type = 'buy' AND status IN ('delivered', 'completed')");
+$stmt->bind_param("i", $sellerId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $totalRevenue += floatval($row['sales_earnings']);
+
+// Calculate Total Orders (Sales + Rentals)
 $totalOrders = 0;
+$stmt = $conn->prepare("SELECT COUNT(*) as c FROM book_rentals WHERE seller_id = ?");
+$stmt->bind_param("i", $sellerId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $totalOrders += intval($row['c']);
+
+$stmt = $conn->prepare("SELECT COUNT(*) as c FROM order_items WHERE seller_id = ? AND purchase_type = 'buy'");
+$stmt->bind_param("i", $sellerId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $totalOrders += intval($row['c']);
+
+// Active Books
 $activeBooks = 0;
+$stmt = $conn->prepare("SELECT COUNT(*) as c FROM books WHERE user_id = ?"); // Assuming user_id maps to the seller
+$stmt->bind_param("i", $userId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $activeBooks = intval($row['c']);
+
+// Total Renters/Customers
 $totalRenters = 0;
+$stmt = $conn->prepare("SELECT COUNT(DISTINCT user_id) as c FROM book_rentals WHERE seller_id = ?");
+$stmt->bind_param("i", $sellerId);
+$stmt->execute();
+if ($row = $stmt->get_result()->fetch_assoc()) $totalRenters = intval($row['c']);
+
+// Display each product approval result once while keeping it in Notifications.
+$approvalNotification = null;
+$approvalStmt = $conn->prepare("SELECT id, type, content FROM notifications WHERE user_id = ? AND is_read = 0 AND type IN ('product_approved', 'product_rejected') ORDER BY created_at ASC LIMIT 1");
+if ($approvalStmt) {
+    $approvalStmt->bind_param("i", $userId);
+    $approvalStmt->execute();
+    $approvalNotification = $approvalStmt->get_result()->fetch_assoc();
+    $approvalStmt->close();
+    if ($approvalNotification) {
+        $markApprovalStmt = $conn->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?");
+        if ($markApprovalStmt) {
+            $markApprovalStmt->bind_param("ii", $approvalNotification['id'], $userId);
+            $markApprovalStmt->execute();
+            $markApprovalStmt->close();
+        }
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -179,6 +231,26 @@ $totalRenters = 0;
     <!-- Include the fixed sidebar -->
     <?php include("include/seller_sidebar.php"); ?>
 
+    <?php if ($approvalNotification): ?>
+    <div class="modal fade" id="productApprovalModal" tabindex="-1" aria-labelledby="productApprovalModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header <?php echo $approvalNotification['type'] === 'product_approved' ? 'bg-success' : 'bg-danger'; ?> text-white">
+                    <h5 class="modal-title" id="productApprovalModalLabel">
+                        <?php echo $approvalNotification['type'] === 'product_approved' ? 'Product approved' : 'Product rejected'; ?>
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body"><?php echo htmlspecialchars($approvalNotification['content']); ?></div>
+                <div class="modal-footer">
+                    <a href="notifications.php?mode=seller" class="btn btn-outline-secondary">View notifications</a>
+                    <button type="button" class="btn btn-warning" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Main Content wrapper matching the sidebar layout -->
     <div class="main-content">
         <div class="page-content">
@@ -283,5 +355,8 @@ $totalRenters = 0;
 
     <!-- Bootstrap Bundle JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <?php if ($approvalNotification): ?>
+    <script>new bootstrap.Modal(document.getElementById('productApprovalModal')).show();</script>
+    <?php endif; ?>
 </body>
 </html>

@@ -26,6 +26,13 @@ if ($conn) {
     if ($res && $row = $res->fetch_assoc()) $activeRentals = $row['cnt'];
 }
 
+// Check active unresolved security risks from intrusion detection triggers
+$securityRiskCount = 0;
+if ($conn) {
+    $rRes = $conn->query("SELECT COUNT(*) as cnt FROM audit_logs WHERE (activity LIKE 'RISK%' OR action = 'RISK') AND (is_resolved = 0 OR is_resolved IS NULL)");
+    if ($rRes && $row = $rRes->fetch_assoc()) $securityRiskCount = (int)$row['cnt'];
+}
+
 // Recent seller requests
 $recentSellers = [];
 if ($conn) {
@@ -40,8 +47,8 @@ if ($conn) {
 // Recent audit logs
 $recentLogs = [];
 if ($conn) {
-    $sql = "SELECT a.id, a.activity, a.details, a.created_at, 
-                   COALESCE(u.email, 'System') as user_email
+    $sql = "SELECT a.id, a.action, a.activity, a.details, a.created_at, a.is_resolved,
+                   COALESCE(u.email, 'Direct DB / System') as user_email
             FROM audit_logs a LEFT JOIN users u ON a.user_id = u.id 
             ORDER BY a.created_at DESC LIMIT 5";
     $result = $conn->query($sql);
@@ -76,6 +83,27 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         </div>
 
         <div class="page-content">
+            <?php if ($securityRiskCount > 0): ?>
+                <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 5px solid #ef4444; border-radius: 12px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 3px rgba(239, 68, 68, 0.08);">
+                    <div style="display: flex; align-items: center; gap: 14px;">
+                        <div style="width: 42px; height: 42px; border-radius: 50%; background: #fee2e2; color: #dc2626; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div>
+                            <div style="font-weight: 700; color: #991b1b; font-size: 15px;">
+                                SECURITY ALERT: <?php echo $securityRiskCount; ?> Unauthorized Database Modification(s) Detected!
+                            </div>
+                            <div style="font-size: 13px; color: #b91c1c; margin-top: 2px;">
+                                Critical data (such as book pricing or user records) was altered directly in SQL without web application session authorization.
+                            </div>
+                        </div>
+                    </div>
+                    <a href="audit_logs.php?filter=risk" style="background: #ef4444; color: white; padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; text-decoration: none; flex-shrink: 0;">
+                        Inspect Threats <i class="fa-solid fa-arrow-right ms-1"></i>
+                    </a>
+                </div>
+            <?php endif; ?>
+
             <!-- Stat Cards -->
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px;">
                 <div class="content-card" style="padding: 20px;">
@@ -159,18 +187,33 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                         <div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i>No activity recorded yet.</div>
                     <?php else: ?>
                         <div>
-                            <?php foreach ($recentLogs as $i => $log): ?>
-                            <div style="display: flex; gap: 14px; padding: 16px 22px; border-bottom: 1px solid var(--border);<?php if ($i === count($recentLogs) - 1) echo 'border-bottom:none;'; ?>">
+                            <?php foreach ($recentLogs as $i => $log): 
+                                $isRisk = ($log['action'] === 'RISK' || strpos($log['activity'], 'RISK') !== false);
+                                $isResolved = !empty($log['is_resolved']) && $log['is_resolved'] == 1;
+                            ?>
+                            <div style="display: flex; gap: 14px; padding: 16px 22px; border-bottom: 1px solid var(--border);<?php if ($i === count($recentLogs) - 1) echo 'border-bottom:none;'; ?><?php if ($isRisk && !$isResolved) echo 'background:#fff5f5; border-left:4px solid #ef4444;'; ?><?php if ($isResolved) echo 'background:#f0fdf4; border-left:4px solid #22c55e;'; ?>">
                                 <div style="display: flex; flex-direction: column; align-items: center; padding-top: 4px;">
-                                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--primary); flex-shrink: 0;"></div>
+                                    <div style="width: 10px; height: 10px; border-radius: 50%; background: <?php echo ($isRisk && !$isResolved) ? '#ef4444' : ($isResolved ? '#22c55e' : 'var(--primary)'); ?>; flex-shrink: 0;"></div>
                                     <?php if ($i < count($recentLogs) - 1): ?>
                                         <div style="width: 2px; flex: 1; background: var(--border); margin-top: 6px;"></div>
                                     <?php endif; ?>
                                 </div>
                                 <div style="flex: 1; min-width: 0;">
-                                    <div style="font-size: 13px; font-weight: 600; margin-bottom: 3px;"><?php echo htmlspecialchars($log['activity']); ?></div>
-                                    <div style="font-size: 12px; color: var(--text-muted); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"><?php echo htmlspecialchars($log['details']); ?></div>
-                                    <div style="font-size: 11px; color: var(--text-light); margin-top: 4px;">
+                                    <div style="font-size: 13px; font-weight: 700; margin-bottom: 3px; color: <?php echo ($isRisk && !$isResolved) ? '#dc2626' : ($isResolved ? '#15803d' : 'inherit'); ?>;">
+                                        <?php if ($isRisk && !$isResolved): ?>
+                                            <i class="fa-solid fa-triangle-exclamation me-1"></i>
+                                        <?php elseif ($isResolved): ?>
+                                            <i class="fa-solid fa-circle-check me-1 text-success"></i>
+                                        <?php endif; ?>
+                                        <?php echo htmlspecialchars($log['activity']); ?>
+                                        <?php if ($isResolved): ?>
+                                            <span class="badge bg-success text-white ms-1" style="font-size: 10px; font-weight: 600;">SOLVED</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div style="font-size: 12px; color: <?php echo $isRisk ? '#7f1d1d' : 'var(--text-muted)'; ?>; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+                                        <?php echo htmlspecialchars($log['details']); ?>
+                                    </div>
+                                    <div style="font-size: 11px; color: <?php echo $isRisk ? '#b91c1c' : 'var(--text-light)'; ?>; margin-top: 4px;">
                                         <i class="fa-regular fa-clock"></i>
                                         <?php 
                                             $diff = time() - strtotime($log['created_at']);

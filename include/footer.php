@@ -84,7 +84,7 @@
                     <li><a href="rentbooks.php" class="bw-footer-link">Rent Books</a></li>
                     <li><a href="explore.php" class="bw-footer-link">Explore Catalog</a></li>
                     <li><a href="libraries.php" class="bw-footer-link">Davao Libraries</a></li>
-                    <li><a href="bookswap.php" class="bw-footer-link">Book Swap Hub</a></li>
+                    <li><a href="javascript:void(0);" onclick="alert('Book Swap feature is currently under development. Stay tuned for future updates!');" class="bw-footer-link">Book Swap Hub</a></li>
                     <li><a href="home.php" class="bw-footer-link">Most Popular</a></li>
                 </ul>
             </div>
@@ -115,6 +115,45 @@
         </div>
     </div>
 </footer>
+
+<!-- Guest Authentication Modal -->
+<div class="modal fade" id="guestAuthModal" tabindex="-1" aria-labelledby="guestAuthModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content" style="border-radius: 12px; border: none; overflow: hidden;">
+            <div class="modal-header" style="background-color: #f8a100; color: white; border-bottom: none;">
+                <h5 class="modal-title fw-bold" id="guestAuthModalLabel">
+                    <i class="fa-solid fa-user-lock me-2"></i> Account Required
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center p-4">
+                <img src="images/logo.png" alt="BookWagon Logo" style="height: 60px; margin-bottom: 20px;">
+                <h4 class="fw-bold text-dark mb-3">Ready to get this book?</h4>
+                <p class="text-muted mb-4">You need to log in or create an account to start buying or renting books from the community.</p>
+                
+                <div class="d-grid gap-3">
+                    <a href="login.php" class="btn btn-lg fw-bold" style="background-color: #f8a100; color: white; border-radius: 8px;">Log In</a>
+                    <a href="signup.php" class="btn btn-lg fw-bold text-dark" style="background-color: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px;">Create an Account</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.isGuest = <?php echo (isset($is_guest) && $is_guest) ? 'true' : 'false'; ?>;
+    
+    // Global function to intercept restricted actions for guests
+    function requireLogin(event, isGuest) {
+        if (isGuest) {
+            if (event) event.preventDefault();
+            var modal = new bootstrap.Modal(document.getElementById('guestAuthModal'));
+            modal.show();
+            return false;
+        }
+        return true;
+    }
+</script>
 
 <!-- Copyright & Social Strip -->
 <div class="bw-copyright-strip">

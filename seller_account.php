@@ -51,28 +51,40 @@ if (isset($_POST['upload_picture'])) {
         mkdir($targetDir, 0777, true);
     }
     
-    $fileName = basename($_FILES["profile_picture"]["name"]);
-    $targetFilePath = $targetDir . $userId . "_" . $fileName;
-    $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
+    $file = $_FILES["profile_picture"];
+    $fileExt = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+    $allowTypes = array('jpg', 'png', 'jpeg', 'gif', 'webp');
+    $maxSize = 5 * 1024 * 1024;
     
-    // Allow certain file formats
-    $allowTypes = array('jpg', 'png', 'jpeg', 'gif');
-    if (in_array($fileType, $allowTypes)) {
-        // Upload file to server
-        if (move_uploaded_file($_FILES["profile_picture"]["tmp_name"], $targetFilePath)) {
-            // Update profile picture path in database
-            $updateStmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
-            $updateStmt->bind_param("si", $targetFilePath, $userId);
-            $updateStmt->execute();
-            
-            // Refresh page to show updated picture
-            header("Location: seller_account.php");
-            exit();
-        } else {
-            $uploadError = "Sorry, there was an error uploading your file.";
-        }
+    if ($file['size'] > $maxSize) {
+        $uploadError = "Profile picture exceeds maximum allowed size of 5MB.";
+    } elseif (!in_array($fileExt, $allowTypes)) {
+        $uploadError = "Sorry, only JPG, JPEG, PNG, GIF & WEBP files are allowed.";
     } else {
-        $uploadError = "Sorry, only JPG, JPEG, PNG & GIF files are allowed.";
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime = $finfo !== false ? finfo_file($finfo, $file['tmp_name']) : '';
+        if ($finfo !== false) finfo_close($finfo);
+        $allowMimes = array('image/jpeg', 'image/png', 'image/gif', 'image/webp');
+        
+        if (!in_array($mime, $allowMimes)) {
+            $uploadError = "Invalid image file format.";
+        } else {
+            $uniqueFileName = "profile_" . $userId . "_" . time() . "_" . bin2hex(random_bytes(4)) . "." . $fileExt;
+            $targetFilePath = $targetDir . $uniqueFileName;
+            
+            if (move_uploaded_file($file["tmp_name"], $targetFilePath)) {
+                chmod($targetFilePath, 0644);
+                $updateStmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $updateStmt->bind_param("si", $targetFilePath, $userId);
+                $updateStmt->execute();
+                $updateStmt->close();
+                
+                header("Location: seller_account.php");
+                exit();
+            } else {
+                $uploadError = "Sorry, there was an error uploading your file.";
+            }
+        }
     }
 }
 
@@ -80,33 +92,44 @@ if (isset($_POST['upload_picture'])) {
 if (isset($_POST['upload_shop_logo'])) {
     $targetDir = "uploads/shop_logos/";
     
-    // Create directory if it doesn't exist
     if (!file_exists($targetDir)) {
         mkdir($targetDir, 0777, true);
     }
     
-    $fileName = basename($_FILES["shop_logo"]["name"]);
-    $targetFilePath = $targetDir . $userId . "_" . $fileName;
-    $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
+    $file = $_FILES["shop_logo"];
+    $fileExt = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+    $allowTypes = array('jpg', 'png', 'jpeg', 'gif', 'webp');
+    $maxSize = 5 * 1024 * 1024;
     
-    // Allow certain file formats
-    $allowTypes = array('jpg', 'png', 'jpeg', 'gif');
-    if (in_array($fileType, $allowTypes)) {
-        // Upload file to server
-        if (move_uploaded_file($_FILES["shop_logo"]["tmp_name"], $targetFilePath)) {
-            // Update shop logo path in database
-            $updateStmt = $conn->prepare("UPDATE sellers SET shop_logo = ? WHERE user_id = ?");
-            $updateStmt->bind_param("si", $targetFilePath, $userId);
-            $updateStmt->execute();
-            
-            // Refresh page to show updated logo
-            header("Location: seller_account.php");
-            exit();
-        } else {
-            $uploadError = "Sorry, there was an error uploading your file.";
-        }
+    if ($file['size'] > $maxSize) {
+        $uploadError = "Shop logo exceeds maximum allowed size of 5MB.";
+    } elseif (!in_array($fileExt, $allowTypes)) {
+        $uploadError = "Sorry, only JPG, JPEG, PNG, GIF & WEBP files are allowed.";
     } else {
-        $uploadError = "Sorry, only JPG, JPEG, PNG & GIF files are allowed.";
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime = $finfo !== false ? finfo_file($finfo, $file['tmp_name']) : '';
+        if ($finfo !== false) finfo_close($finfo);
+        $allowMimes = array('image/jpeg', 'image/png', 'image/gif', 'image/webp');
+        
+        if (!in_array($mime, $allowMimes)) {
+            $uploadError = "Invalid image file format.";
+        } else {
+            $uniqueFileName = "logo_" . $userId . "_" . time() . "_" . bin2hex(random_bytes(4)) . "." . $fileExt;
+            $targetFilePath = $targetDir . $uniqueFileName;
+            
+            if (move_uploaded_file($file["tmp_name"], $targetFilePath)) {
+                chmod($targetFilePath, 0644);
+                $updateStmt = $conn->prepare("UPDATE sellers SET shop_logo = ? WHERE user_id = ?");
+                $updateStmt->bind_param("si", $targetFilePath, $userId);
+                $updateStmt->execute();
+                $updateStmt->close();
+                
+                header("Location: seller_account.php");
+                exit();
+            } else {
+                $uploadError = "Sorry, there was an error uploading your file.";
+            }
+        }
     }
 }
 
@@ -769,7 +792,7 @@ $seller_status = $seller['status'] ?? 'pending';
                             </div>
                             <div class="col-md-6">
                                 <label for="phone" class="form-label">Phone</label>
-                                <input type="text" class="form-control" id="phone" name="phone" value="<?php echo $phone; ?>">
+                                <input type="text" class="form-control bw-phone" id="phone" name="phone" value="<?php echo $phone; ?>">
                             </div>
                         </div>
                         
@@ -811,7 +834,7 @@ $seller_status = $seller['status'] ?? 'pending';
                         <div class="row mb-3">
                             <div class="col-md-6">
                                 <label for="postal_code" class="form-label">Postal Code</label>
-                                <input type="text" class="form-control" id="postal_code" name="postal_code" value="<?php echo $postal_code; ?>">
+                                <input type="text" class="form-control bw-postal" id="postal_code" name="postal_code" value="<?php echo $postal_code; ?>">
                             </div>
                             <div class="col-md-6">
                                 <label for="tax_id" class="form-label">TAX ID</label>

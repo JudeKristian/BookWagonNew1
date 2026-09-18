@@ -109,11 +109,11 @@ if(isset($_GET['search']) && $_GET['search'] != '') {
 }
 
 // Count total books
-$count_query = "SELECT COUNT(*) as total FROM books";
+$count_query = "SELECT COUNT(*) as total FROM books WHERE approval_status = 'approved'";
 
 // Add WHERE if we have conditions
 if(!empty($where_clauses)) {
-    $count_query .= " WHERE " . implode(" AND ", $where_clauses);
+    $count_query .= " AND " . implode(" AND ", $where_clauses);
 }
 
 // Prepare and execute the count query

@@ -1,5 +1,5 @@
 <?php
-include("session.php");
+include("guest_session.php");
 include("connect.php");
 ?>
 
@@ -525,11 +525,128 @@ include("connect.php");
             transform: translateY(-3px);
             box-shadow: 0 4px 10px rgba(248, 161, 0, 0.35);
         }
+        /* ----- Hero Section ----- */
+        .hero-section {
+            display: flex;
+            align-items: center;
+            padding-top: 40px;
+            padding-bottom: 20px;
+            background-color: var(--secondary-color);
+        }
+
+        .image-container {
+            position: relative;
+            z-index: 1;
+            padding-left: 20px;
+        }
+
+        .pink-shape {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 95%;
+            height: 100%;
+            background-color: #fca5a5;
+            border-radius: 40px;
+            z-index: -1;
+            transform: rotate(-3deg);
+        }
+
+        .main-image {
+            width: 100%;
+            border-radius: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            object-fit: cover;
+            aspect-ratio: 4/5;
+        }
+
+        .content-container {
+            padding-left: 40px;
+        }
+
+        .hero-title {
+            font-size: 3rem;
+            font-weight: 800;
+            line-height: 1.2;
+            color: #1e293b;
+            margin-bottom: 20px;
+        }
+
+        .hero-subtitle {
+            font-size: 1.1rem;
+            color: #52525b;
+            line-height: 1.6;
+            margin-bottom: 35px;
+            max-width: 90%;
+        }
+
+        .btn-start {
+            background-color: #805b10;
+            color: white;
+            font-weight: 600;
+            padding: 14px 32px;
+            border-radius: 50px;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+
+        .btn-start:hover {
+            opacity: 0.9;
+            color: white;
+        }
+
+        @media (max-width: 991px) {
+            .content-container {
+                padding-left: 15px;
+                margin-top: 50px;
+            }
+            .hero-title {
+                font-size: 2.5rem;
+            }
+        }
     </style>
 </head>
 <body>
     <!-- User Header Navigation -->
     <?php include("include/user_header.php"); ?>
+
+    <?php if (isset($is_guest) && $is_guest): ?>
+    <!-- Hero Section (Shown only to Guests) -->
+    <section class="hero-section">
+        <div class="container">
+            <div class="row align-items-center">
+                
+                <!-- Left Side: Image -->
+                <div class="col-lg-5 mb-5 mb-lg-0">
+                    <div class="image-container">
+                        <div class="pink-shape"></div>
+                        <img src="images/man-reading.png" alt="Man reading a book" class="main-image bg-white">
+                    </div>
+                </div>
+                
+                <!-- Right Side: Content -->
+                <div class="col-lg-7">
+                    <div class="content-container">
+                        <!-- Main Copy -->
+                        <h1 class="hero-title">
+                            Discover Your Next<br>Great Read
+                        </h1>
+                        <p class="hero-subtitle">
+                            Join a community of readers and collectors. Buy, sell, and explore thousands of books with Book Wagon.
+                        </p>
+                        <a href="signup.php" class="btn-start">
+                            Get Started <i class="bi bi-arrow-right"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <?php endif; ?>
 
     <!-- Navigation tabs -->
     <?php include 'include/tab.php'; ?>
@@ -592,7 +709,7 @@ include("connect.php");
                 </a>
             </div>
             <div class="col-md-4">
-                <a href="bookswap.php" class="text-decoration-none">
+                <a href="#" onclick="alert('Book Swap feature is currently under development. Stay tuned for future updates!'); return false;" class="text-decoration-none">
                     <div class="p-3 bg-white border rounded-3 shadow-sm d-flex align-items-center gap-3 h-100 feature-strip-item" style="transition: all 0.2s ease;">
                         <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0" style="width: 44px; height: 44px; background: rgba(59, 130, 246, 0.12); color: #3b82f6; font-size: 18px;">
                             <i class="fa-solid fa-repeat"></i>
@@ -640,6 +757,7 @@ include("connect.php");
                 $popularBooksQuery = "SELECT b.*, u.firstname, u.lastname 
                                       FROM books b
                                       LEFT JOIN users u ON b.user_id = u.id
+                                      WHERE b.approval_status = 'approved'
                                       ORDER BY RAND() 
                                       LIMIT 10";
                 $popularBooksResult = $conn->query($popularBooksQuery);
@@ -788,6 +906,7 @@ include("connect.php");
                 $exploreBooksQuery = "SELECT b.*, u.firstname, u.lastname 
                                       FROM books b
                                       LEFT JOIN users u ON b.user_id = u.id
+                                      WHERE b.approval_status = 'approved'
                                       ORDER BY RAND() 
                                       LIMIT 15";
                 $exploreBooksResult = $conn->query($exploreBooksQuery);

@@ -18,7 +18,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         // Validate required fields
-        $requiredFields = ['firstName', 'lastName', 'phoneNumber', 'email', 'primaryIdType', 'secondaryIdType'];
+        $requiredFields = ['firstName', 'lastName', 'phoneNumber', 'email', 'primaryIdType', 'secondaryIdType', 'payout_provider', 'payout_name', 'payout_number'];
         $errors = [];
         
         foreach ($requiredFields as $field) {
@@ -86,14 +86,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $secondaryBack = saveUploadedFile('secondaryIdBack', 'secondary_back', $baseUploadDir);
         $selfieImg = saveUploadedFile('selfieImage', 'selfie', $baseUploadDir);
 
+        $payoutQr = null;
+        if (isset($_FILES['payout_qr_code']) && $_FILES['payout_qr_code']['error'] === UPLOAD_ERR_OK) {
+            $payoutQr = saveUploadedFile('payout_qr_code', 'payout_qr', $baseUploadDir);
+        }
+
         // Store step 1 registration data in session
         $_SESSION['seller_registration'] = [
             'user_id' => $userId,
             'first_name' => trim($_POST['firstName']),
-            'middle_name' => trim($_POST['middleInitial'] ?? ''),
             'last_name' => trim($_POST['lastName']),
             'email' => trim($_POST['email']),
             'phone' => trim($_POST['phoneNumber']),
+            'payout_provider' => trim($_POST['payout_provider']),
+            'payout_name' => trim($_POST['payout_name']),
+            'payout_number' => trim($_POST['payout_number']),
+            'payout_qr_code' => $payoutQr,
             'social_media' => trim($_POST['socialMedia'] ?? ''),
             'primary_id_type' => ($_POST['primaryIdType'] === 'other' && !empty($_POST['otherPrimaryIdType'])) ? trim($_POST['otherPrimaryIdType']) : trim($_POST['primaryIdType']),
             'primary_id_front' => $primaryFront,

@@ -1,6 +1,7 @@
 <?php
 include("session.php");
 include("connect.php");
+require_once "includes/audit_logger.php";
 
 // Ensure the user is logged in and is a seller
 $userType = $_SESSION['usertype'] ?? '';
@@ -26,6 +27,46 @@ if (!$sellerData) {
 }
 
 $sellerId = $sellerData['id'];
+
+// Process QR Code Scan
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'scan_return') {
+    $rentalId = intval($_GET['rental_id']);
+    $token = $_GET['token'] ?? '';
+    
+    // Verify the token
+    $stmt = $conn->prepare("SELECT return_id, status FROM book_rentals WHERE rental_id = ? AND return_token = ? AND user_id != ?"); // Ensure it's not the seller themself
+    $stmt->bind_param("isi", $rentalId, $token, $userId);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    
+    if ($res->num_rows > 0) {
+        $rental = $res->fetch_assoc();
+        
+        $conn->begin_transaction();
+        try {
+            // Mark rental as returned but pending inspection
+            $upd = $conn->prepare("UPDATE book_rentals SET status = 'returned' WHERE rental_id = ?");
+            $upd->bind_param("i", $rentalId);
+            $upd->execute();
+            
+            // Mark the return request as received
+            $updRet = $conn->prepare("UPDATE book_returns SET status = 'received', received_date = NOW() WHERE rental_id = ? AND seller_id = ?");
+            $updRet->bind_param("ii", $rentalId, $sellerId);
+            $updRet->execute();
+            
+            $conn->commit();
+            $_SESSION['success_message'] = "QR Code verified! The return has been marked as Received. Please manually inspect the book to complete the return.";
+        } catch (Exception $e) {
+            $conn->rollback();
+            $_SESSION['error_message'] = "Database error during QR verification.";
+        }
+    } else {
+        $_SESSION['error_message'] = "Invalid or expired QR code.";
+    }
+    
+    header("Location: renter.php");
+    exit();
+}
 
 // Process form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'process_return') {
@@ -206,6 +247,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $logDetails
         );
         $logStmt->execute();
+        
+        // Log in the audit_logs
+        log_activity($userId, 'Return ' . ucfirst($returnStatus), "Seller updated return status to {$returnStatus} for Book '{$returnData['book_title']}' (Rental #{$rentalId})");
+        
+        if ($returnStatus === 'completed') {
+            log_activity($renterId, 'Escrow Settled', "Deposit returned/settled for Book '{$returnData['book_title']}' (Rental #{$rentalId})");
+        }
         
         // Commit transaction
         $conn->commit();

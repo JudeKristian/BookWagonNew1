@@ -3,6 +3,7 @@
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<script src="js/bw-format.js" defer></script>
 
 <nav class="navbar navbar-expand-lg navbar-light bg-white" style="border-bottom: 1px solid #e2e8f0;">
     <div class="container">
@@ -35,6 +36,13 @@
                             return 'rented_books.php';
                         case 'payment_confirmed':
                             return 'history.php';
+                        case 'seller_approved':
+                            return 'seller_dashboard.php';
+                        case 'seller_rejected':
+                            return 'seller_success.php';
+                        case 'product_approved':
+                        case 'product_rejected':
+                            return 'Manage_books.php';
                         default:
                             return 'notifications.php?mode=buyer';
                     }
@@ -65,7 +73,7 @@
             }
 
             // Buyer-mode notification types
-            $buyerNotifTypes = "'buddy_request','buddy_accepted','order_shipped','order_delivered','rental_approved','rental_due','payment_confirmed'";
+            $buyerNotifTypes = "'buddy_request','buddy_accepted','order_shipped','order_delivered','rental_approved','rental_due','payment_confirmed','seller_approved','seller_rejected','product_approved','product_rejected'";
 
             // Get unread notifications count (buyer types only)
             $unreadCount = 0;
@@ -99,104 +107,115 @@
             }
             ?>
             
-            <!-- Notification Bell -->
-            <a href="#notificationsOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="notificationsOffcanvas" class="nav-link position-relative p-0 me-3" style="background: none; border: none; outline: none; box-shadow: none;">
-                <i class="fa-regular fa-bell"></i>
-                <?php if($unreadCount > 0): ?>
-                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.65rem; padding: 0.25rem 0.4rem;">
-                    <?php echo $unreadCount > 9 ? '9+' : $unreadCount; ?>
-                </span>
-                <?php endif; ?>
-            </a>
-            
-            <?php
-            // Get unread messages count for the message icon
-            $unreadMessagesCount = 0;
-            if(isset($_SESSION['id'])) {
-                $msgCountQuery = "SELECT COUNT(*) as count FROM messages m 
-                                JOIN conversation_participants cp ON m.conversation_id = cp.conversation_id 
-                                WHERE cp.user_id = ? 
-                                AND m.sender_id != ? 
-                                AND m.is_read = 0";
-                $stmt = $conn->prepare($msgCountQuery);
-                $stmt->bind_param("ii", $_SESSION['id'], $_SESSION['id']);
-                $stmt->execute();
-                $msgResult = $stmt->get_result();
-                if($row = $msgResult->fetch_assoc()) {
-                    $unreadMessagesCount = $row['count'];
-                }
+            <?php if (!isset($is_guest) || !$is_guest): ?>
+                <!-- Notification Bell -->
+                <a href="#notificationsOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="notificationsOffcanvas" class="nav-link position-relative p-0 me-3" style="background: none; border: none; outline: none; box-shadow: none;">
+                    <i class="fa-regular fa-bell"></i>
+                    <?php if(isset($unreadCount) && $unreadCount > 0): ?>
+                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.65rem; padding: 0.25rem 0.4rem;">
+                        <?php echo $unreadCount > 9 ? '9+' : $unreadCount; ?>
+                    </span>
+                    <?php endif; ?>
+                </a>
                 
-                // Fetch recent messages for the offcanvas
-                $recentMessages = [];
-                $recentMsgQuery = "SELECT m.id, m.conversation_id, m.sender_id, m.message_text, m.created_at, m.is_read, u.firstname, u.lastname, u.profile_picture
-                                   FROM messages m
-                                   JOIN conversation_participants cp ON m.conversation_id = cp.conversation_id
-                                   JOIN users u ON m.sender_id = u.id
-                                   WHERE cp.user_id = ? AND m.sender_id != ?
-                                   ORDER BY m.created_at DESC LIMIT 5";
-                $stmtMsg = $conn->prepare($recentMsgQuery);
-                $stmtMsg->bind_param("ii", $_SESSION['id'], $_SESSION['id']);
-                $stmtMsg->execute();
-                $resMsg = $stmtMsg->get_result();
-                while($mRow = $resMsg->fetch_assoc()) {
-                    $recentMessages[] = $mRow;
-                }
-            }
-            ?>
-            
-            <a href="#messagesOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="messagesOffcanvas" class="nav-link me-3 position-relative" style="background: none; border: none; outline: none; box-shadow: none;">
-                <i class="fa-regular fa-envelope"></i>
-                <?php if($unreadMessagesCount > 0): ?>
-                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.65rem; padding: 0.25rem 0.4rem;">
-                    <?php echo $unreadMessagesCount > 9 ? '9+' : $unreadMessagesCount; ?>
-                </span>
-                <?php endif; ?>
-            </a>
-            
-            <?php
-            // Fetch current user details for navbar profile avatar
-            $navUserPhoto = $_SESSION['profile_picture'] ?? '';
-            $navUserFirst = $_SESSION['firstname'] ?? '';
-            $navUserLast = $_SESSION['lastname'] ?? '';
-            $navUserEmail = $_SESSION['email'] ?? '';
-            $navUserInitial = strtoupper(substr($navUserFirst ?: ($navUserEmail ?: 'U'), 0, 1));
-            $navUserDisplay = $navUserFirst ? $navUserFirst : ($navUserEmail ? explode('@', $navUserEmail)[0] : 'User');
-            $navUserFullName = trim($navUserFirst . ' ' . $navUserLast) ?: $navUserDisplay;
+                <!-- Messages Icon -->
+                <a href="#messagesOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="messagesOffcanvas" class="nav-link me-3 position-relative" style="background: none; border: none; outline: none; box-shadow: none;">
+                    <i class="fa-regular fa-envelope"></i>
+                    <?php if(isset($unreadMessagesCount) && $unreadMessagesCount > 0): ?>
+                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.65rem; padding: 0.25rem 0.4rem;">
+                        <?php echo $unreadMessagesCount > 9 ? '9+' : $unreadMessagesCount; ?>
+                    </span>
+                    <?php endif; ?>
+                </a>
+                
+                <?php
+                // Fetch current user details for navbar profile avatar
+                $navUserPhoto = $_SESSION['profile_picture'] ?? '';
+                $navUserFirst = $_SESSION['firstname'] ?? '';
+                $navUserLast = $_SESSION['lastname'] ?? '';
+                $navUserEmail = $_SESSION['email'] ?? '';
+                $navUserInitial = strtoupper(substr($navUserFirst ?: ($navUserEmail ?: 'U'), 0, 1));
+                $navUserDisplay = $navUserFirst ? $navUserFirst : ($navUserEmail ? explode('@', $navUserEmail)[0] : 'User');
+                $navUserFullName = trim($navUserFirst . ' ' . $navUserLast) ?: $navUserDisplay;
 
-            if (isset($_SESSION['id'])) {
-                $uQuery = "SELECT firstname, lastname, email, profile_picture, phone FROM users WHERE id = ?";
-                if ($uStmt = $conn->prepare($uQuery)) {
-                    $uStmt->bind_param("i", $_SESSION['id']);
-                    $uStmt->execute();
-                    $uRes = $uStmt->get_result();
-                    if ($uRow = $uRes->fetch_assoc()) {
-                        if (!empty($uRow['profile_picture'])) $navUserPhoto = $uRow['profile_picture'];
-                        if (!empty($uRow['firstname'])) $navUserFirst = $uRow['firstname'];
-                        if (!empty($uRow['lastname'])) $navUserLast = $uRow['lastname'];
-                        if (!empty($uRow['phone'])) $_SESSION['phone'] = $uRow['phone'];
-                        $navUserDisplay = $navUserFirst ? $navUserFirst : ($navUserEmail ? explode('@', $navUserEmail)[0] : 'User');
-                        $navUserFullName = trim($navUserFirst . ' ' . $navUserLast) ?: $navUserDisplay;
-                        $navUserInitial = strtoupper(substr($navUserFirst ?: ($navUserEmail ?: 'U'), 0, 1));
+                if (isset($_SESSION['id'])) {
+                    $uQuery = "SELECT firstname, lastname, email, profile_picture, phone FROM users WHERE id = ?";
+                    if ($uStmt = $conn->prepare($uQuery)) {
+                        $uStmt->bind_param("i", $_SESSION['id']);
+                        $uStmt->execute();
+                        $uRes = $uStmt->get_result();
+                        if ($uRow = $uRes->fetch_assoc()) {
+                            if (!empty($uRow['profile_picture'])) $navUserPhoto = $uRow['profile_picture'];
+                            if (!empty($uRow['firstname'])) $navUserFirst = $uRow['firstname'];
+                            if (!empty($uRow['lastname'])) $navUserLast = $uRow['lastname'];
+                            if (!empty($uRow['phone'])) $_SESSION['phone'] = $uRow['phone'];
+                            $navUserDisplay = $navUserFirst ? $navUserFirst : ($navUserEmail ? explode('@', $navUserEmail)[0] : 'User');
+                            $navUserFullName = trim($navUserFirst . ' ' . $navUserLast) ?: $navUserDisplay;
+                            $navUserInitial = strtoupper(substr($navUserFirst ?: ($navUserEmail ?: 'U'), 0, 1));
+                        }
+                        $uStmt->close();
                     }
-                    $uStmt->close();
                 }
-            }
-            ?>
-            
-            <!-- Profile Sidebar Trigger -->
-            <a href="#accountOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="accountOffcanvas" class="nav-link border-0 bg-transparent d-flex align-items-center text-dark p-0 gap-2 text-decoration-none">
-                <?php if (!empty($navUserPhoto) && file_exists($navUserPhoto)): ?>
-                    <img src="<?php echo htmlspecialchars($navUserPhoto); ?>" alt="Profile" class="rounded-circle shadow-sm" style="width: 32px; height: 32px; object-fit: cover; border: 1.5px solid #f8a100;">
-                <?php else: ?>
-                    <div class="rounded-circle d-flex align-items-center justify-content-center text-white fw-bold shadow-sm" style="width: 32px; height: 32px; font-size: 13px; background-color: #f8a100;">
-                        <?php echo $navUserInitial; ?>
-                    </div>
-                <?php endif; ?>
-                <span class="fw-medium text-dark" style="font-size: 14px;"><?php echo htmlspecialchars($navUserDisplay); ?></span>
-            </a>
+                ?>
+                
+                <!-- Profile Sidebar Trigger -->
+                <a href="#accountOffcanvas" data-bs-toggle="offcanvas" role="button" aria-controls="accountOffcanvas" class="nav-link border-0 bg-transparent d-flex align-items-center text-dark p-0 gap-2 text-decoration-none">
+                    <?php if (!empty($navUserPhoto) && file_exists($navUserPhoto)): ?>
+                        <img src="<?php echo htmlspecialchars($navUserPhoto); ?>" alt="Profile" class="rounded-circle shadow-sm" style="width: 32px; height: 32px; object-fit: cover; border: 1.5px solid #f8a100;">
+                    <?php else: ?>
+                        <div class="rounded-circle d-flex align-items-center justify-content-center text-white fw-bold shadow-sm" style="width: 32px; height: 32px; font-size: 13px; background-color: #f8a100;">
+                            <?php echo $navUserInitial; ?>
+                        </div>
+                    <?php endif; ?>
+                    <span class="fw-medium text-dark" style="font-size: 14px;"><?php echo htmlspecialchars($navUserDisplay); ?></span>
+                </a>
+            <?php else: ?>
+                <!-- Guest Buttons -->
+                <a href="login.php" class="btn fw-semibold ms-2" style="color: #1e293b; font-size: 14px; padding: 6px 12px; transition: color 0.2s;">
+                    Log In
+                </a>
+                <a href="signup.php" class="btn fw-semibold ms-2" style="background-color: #f8a100; color: white; border-radius: 6px; font-size: 14px; padding: 6px 16px; transition: opacity 0.2s;">
+                    Sign Up
+                </a>
+            <?php endif; ?>
         </div>
     </div>
 </nav>
+
+<?php
+// Check for seller application status banner on user screen
+if (isset($_SESSION['id']) && isset($conn) && $conn) {
+    $sBannerStmt = $conn->prepare("SELECT status, shop_name FROM sellers WHERE user_id = ? ORDER BY id DESC LIMIT 1");
+    if ($sBannerStmt) {
+        $sBannerStmt->bind_param("i", $_SESSION['id']);
+        $sBannerStmt->execute();
+        $sBannerRes = $sBannerStmt->get_result();
+        if ($sRow = $sBannerRes->fetch_assoc()) {
+            if ($sRow['status'] === 'rejected') {
+                ?>
+                <div class="alert alert-danger alert-dismissible fade show rounded-0 mb-0 py-2 border-0 text-center shadow-sm" role="alert" style="background-color: #fee2e2; color: #991b1b; font-size: 13.5px;">
+                    <i class="fa-solid fa-circle-exclamation me-1"></i>
+                    Your seller application for <strong><?php echo htmlspecialchars($sRow['shop_name']); ?></strong> was not approved.
+                    <a href="seller_success.php" class="text-danger fw-bold text-decoration-underline ms-2">View Application Status & Details</a>
+                    <button type="button" class="btn-close py-2" data-bs-dismiss="alert" aria-label="Close" style="top: 0.2rem;"></button>
+                </div>
+                <?php
+            } elseif ($sRow['status'] === 'approved' && ($_SESSION['usertype'] ?? '') !== 'seller') {
+                $_SESSION['usertype'] = 'seller';
+                ?>
+                <div class="alert alert-success alert-dismissible fade show rounded-0 mb-0 py-2 border-0 text-center shadow-sm" role="alert" style="background-color: #ecfdf5; color: #065f46; font-size: 13.5px;">
+                    <i class="fa-solid fa-circle-check me-1"></i>
+                    Congratulations! Your seller application for <strong><?php echo htmlspecialchars($sRow['shop_name']); ?></strong> has been approved!
+                    <a href="seller_dashboard.php" class="text-success fw-bold text-decoration-underline ms-2">Go to Seller Dashboard</a>
+                    <button type="button" data-bs-dismiss="alert" aria-label="Close" class="btn-close py-2" style="top: 0.2rem;"></button>
+                </div>
+                <?php
+            }
+        }
+        $sBannerStmt->close();
+    }
+}
+?>
 
 <!-- Notifications Offcanvas Sidebar -->
 <div class="offcanvas offcanvas-end shadow-sm" tabindex="-1" id="notificationsOffcanvas" aria-labelledby="notificationsOffcanvasLabel" style="width: 350px;">
@@ -212,7 +231,13 @@
                 <?php foreach($notifications as $notification): ?>
                     <a href="<?php echo getNotificationUrl($notification); ?>" class="list-group-item list-group-item-action py-3 <?php echo $notification['is_read'] ? '' : 'bg-light'; ?>">
                         <div class="d-flex w-100 justify-content-between align-items-center mb-1">
-                            <h6 class="mb-0 text-dark" style="font-size: 0.9rem; font-weight: 600;">BookWagon</h6>
+                            <?php if(($notification['type'] ?? '') === 'seller_rejected'): ?>
+                                <h6 class="mb-0 text-danger" style="font-size: 0.9rem; font-weight: 600;"><i class="fa-solid fa-circle-xmark me-1"></i> Application Declined</h6>
+                            <?php elseif(($notification['type'] ?? '') === 'seller_approved'): ?>
+                                <h6 class="mb-0 text-success" style="font-size: 0.9rem; font-weight: 600;"><i class="fa-solid fa-circle-check me-1"></i> Application Approved</h6>
+                            <?php else: ?>
+                                <h6 class="mb-0 text-dark" style="font-size: 0.9rem; font-weight: 600;">BookWagon</h6>
+                            <?php endif; ?>
                             <small class="text-muted" style="font-size: 0.75rem;"><?php echo timeAgo($notification['created_at']); ?></small>
                         </div>
                         <p class="mb-0 text-secondary" style="font-size: 0.85rem; line-height: 1.4;">
@@ -323,7 +348,7 @@
                 <span class="fw-medium text-dark">Rental History</span>
                 <i class="fa-solid fa-chevron-right ms-auto text-muted small"></i>
             </a>
-            <a href="collections.php" class="list-group-item list-group-item-action py-3 d-flex align-items-center">
+            <a href="javascript:void(0);" onclick="alert('This feature is currently under development. Stay tuned for future updates!');" class="list-group-item list-group-item-action py-3 d-flex align-items-center">
                 <i class="fa-solid fa-bookmark text-danger me-3 fs-5" style="width: 24px; text-align: center;"></i> 
                 <span class="fw-medium text-dark">My Collections</span>
                 <i class="fa-solid fa-chevron-right ms-auto text-muted small"></i>
@@ -728,4 +753,4 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
-
+

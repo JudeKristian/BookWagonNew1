@@ -54,6 +54,12 @@ try {
         exit();
     }
 
+    // If user has a rejected seller application and did not click to re-apply, show rejection status
+    if ($user && ($user['status'] ?? '') === 'rejected' && !isset($_GET['reapply'])) {
+        header("Location: seller_success.php");
+        exit();
+    }
+
     // Fetch user data for the form
     $sql = "SELECT firstname, lastname, middlename, email FROM users WHERE id = ?";
     $stmt = $conn->prepare($sql);
@@ -438,17 +444,12 @@ try {
                     </div>
 
                     <div class="row g-3">
-                        <div class="col-md-5">
+                        <div class="col-md-6">
                             <label for="firstName" class="form-label">First Name</label>
                             <input type="text" class="form-control" id="firstName" name="firstName" 
                                    value="<?php echo htmlspecialchars($firstName); ?>" readonly>
                         </div>
-                        <div class="col-md-2">
-                            <label for="middleInitial" class="form-label">M.I.</label>
-                            <input type="text" class="form-control" id="middleInitial" name="middleInitial" 
-                                   value="<?php echo htmlspecialchars($middleInitial); ?>" readonly>
-                        </div>
-                        <div class="col-md-5">
+                        <div class="col-md-6">
                             <label for="lastName" class="form-label">Last Name</label>
                             <input type="text" class="form-control" id="lastName" name="lastName" 
                                    value="<?php echo htmlspecialchars($lastName); ?>" readonly>
@@ -463,8 +464,62 @@ try {
                         <div class="col-md-6">
                             <label for="phoneNumber" class="form-label">Contact Phone Number <span class="text-danger">*</span></label>
                             <div class="input-group">
-                                <span class="input-group-text bg-light border-end-0 text-muted"><i class="fa-solid fa-phone"></i></span>
-                                <input type="tel" class="form-control border-start-0 ps-0" id="phoneNumber" name="phoneNumber" placeholder="0912 345 6789" required>
+                                <span class="input-group-text bg-light border-end-0 text-muted"><i class="fa-solid fa-phone me-1"></i> +63</span>
+                                <input type="tel" class="form-control border-start-0 ps-0 bw-phone" id="phoneNumber" name="phoneNumber" placeholder="917 123 4567" required>
+                            </div>
+                        </div>
+
+                        <div class="col-12">
+                            <label for="socialMedia" class="form-label">Social Media / Portfolio Link <span class="text-muted fw-normal">(Optional)</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text bg-light border-end-0 text-muted"><i class="fa-brands fa-facebook"></i></span>
+                                <input type="url" class="form-control border-start-0 ps-0" id="socialMedia" name="socialMedia" placeholder="https://facebook.com/yourprofile">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 1.5: E-Wallet Payout Details -->
+                <div class="registration-card">
+                    <div class="card-header-title">
+                        <div class="header-icon-badge">
+                            <i class="fa-solid fa-qrcode"></i>
+                        </div>
+                        <div>
+                            <h5>E-Wallet Payout Details</h5>
+                            <small class="text-muted">Where the Admin will send your Seller earnings</small>
+                        </div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="payout_provider" class="form-label">Provider <span class="text-danger">*</span></label>
+                            <select class="form-select" id="payout_provider" name="payout_provider" required>
+                                <option value="" disabled selected>Select...</option>
+                                <option value="GCash">GCash</option>
+                                <option value="Maya">Maya</option>
+                                <option value="Seabank">Seabank</option>
+                                <option value="Gotyme">GoTyme</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="payout_name" class="form-label">Account Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="payout_name" name="payout_name" placeholder="Must match ID exactly" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="payout_number" class="form-label">Account Number <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control bw-phone" id="payout_number" name="payout_number" placeholder="0917 123 4567" required>
+                        </div>
+                        
+                        <div class="col-12 mt-4">
+                            <label class="form-label">Payout QR Code Image <span class="text-muted fw-normal">(Highly Recommended)</span></label>
+                            <div class="upload-dropzone" onclick="document.getElementById('payout_qr_code').click()" style="max-width: 400px; padding: 20px;">
+                                <i class="fa-solid fa-qrcode upload-icon"></i>
+                                <div class="upload-text">Upload QR Code</div>
+                                <div class="upload-hint">JPG, PNG, or WEBP (Max 5MB)</div>
+                                <input type="file" id="payout_qr_code" name="payout_qr_code" accept="image/*" onchange="previewFile(this, 'previewPayoutQr')">
+                                <img id="previewPayoutQr" class="preview-img" alt="QR Preview">
                             </div>
                         </div>
 
@@ -640,8 +695,36 @@ try {
     </div>
 
     <!-- Bootstrap Bundle JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Format Phone Number (10 digits after +63) -> 9XX-XXX-XXXX
+        function formatPhoneNumber(input) {
+            let val = input.value.replace(/\D/g, ''); // Remove non-digits
+            if (val.length > 10) val = val.substring(0, 10);
+            
+            let formatted = val;
+            if (val.length > 3 && val.length <= 6) {
+                formatted = val.substring(0, 3) + '-' + val.substring(3);
+            } else if (val.length > 6) {
+                formatted = val.substring(0, 3) + '-' + val.substring(3, 6) + '-' + val.substring(6);
+            }
+            input.value = formatted;
+        }
+
+        // Format GCash Number (11 digits starting with 09) -> 09XX-XXX-XXXX
+        function formatGcashNumber(input) {
+            let val = input.value.replace(/\D/g, ''); // Remove non-digits
+            if (val.length > 11) val = val.substring(0, 11);
+            
+            let formatted = val;
+            if (val.length > 4 && val.length <= 7) {
+                formatted = val.substring(0, 4) + '-' + val.substring(4);
+            } else if (val.length > 7) {
+                formatted = val.substring(0, 4) + '-' + val.substring(4, 7) + '-' + val.substring(7);
+            }
+            input.value = formatted;
+        }
+
         // Toggle 'Other' ID input fields
         document.getElementById('primaryIdType').addEventListener('change', function() {
             const otherContainer = document.getElementById('otherPrimaryIdTypeContainer');
@@ -688,5 +771,6 @@ try {
             }
         }
     </script>
+    <script src="js/bw-format.js"></script>
 </body>
 </html>

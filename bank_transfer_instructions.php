@@ -38,28 +38,49 @@ $bankResult = $conn->query($bankQuery);
 $bankAccount = $bankResult->fetch_assoc();
 
 // Handle receipt upload
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_receipt'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['payment_receipt']) && $_FILES['payment_receipt']['error'] === UPLOAD_ERR_OK) {
+    $file = $_FILES['payment_receipt'];
+
+    // 1. File size check (max 5MB)
+    if ($file['size'] > 5 * 1024 * 1024) {
+        $_SESSION['upload_error'] = "Uploaded receipt exceeds maximum allowed size of 5MB.";
+        header("Location: bank_transfer_instructions.php?order_id=" . $orderId);
+        exit();
+    }
+
+    // 2. Extension whitelist
+    $fileExtension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $allowedExts = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
+    if (!in_array($fileExtension, $allowedExts)) {
+        $_SESSION['upload_error'] = "Invalid file type. Please upload a JPG, PNG, WEBP image or PDF file.";
+        header("Location: bank_transfer_instructions.php?order_id=" . $orderId);
+        exit();
+    }
+
+    // 3. Server-side MIME inspection
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    if ($finfo !== false) {
+        $mimeType = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+        $allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+        if (!in_array($mimeType, $allowedMimes)) {
+            $_SESSION['upload_error'] = "Invalid file format. Please upload an authentic image or PDF.";
+            header("Location: bank_transfer_instructions.php?order_id=" . $orderId);
+            exit();
+        }
+    }
+
     $uploadDir = 'uploads/receipts/';
-    
-    // Create directory if it doesn't exist
     if (!file_exists($uploadDir)) {
         mkdir($uploadDir, 0777, true);
     }
     
-    $fileExtension = pathinfo($_FILES['payment_receipt']['name'], PATHINFO_EXTENSION);
-    $newFilename = 'receipt_' . $orderId . '_' . time() . '.' . $fileExtension;
+    $newFilename = 'receipt_' . $orderId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $fileExtension;
     $targetFile = $uploadDir . $newFilename;
     
-    // Check file type
-    $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'];
-    if (!in_array($_FILES['payment_receipt']['type'], $allowedTypes)) {
-        $_SESSION['upload_error'] = "Invalid file type. Please upload an image or PDF file.";
-        header("Location: bank_transfer_instructions.php?order_id=" . $orderId);
-        exit();
-    }
-    
     // Upload file
-    if (move_uploaded_file($_FILES['payment_receipt']['tmp_name'], $targetFile)) {
+    if (move_uploaded_file($file['tmp_name'], $targetFile)) {
+        chmod($targetFile, 0644);
         // Update order with receipt information
         $updateStmt = $conn->prepare("UPDATE orders SET payment_receipt = ?, payment_status = 'verification_pending', payment_date = NOW() WHERE order_id = ? AND user_id = ?");
         $updateStmt->bind_param("sii", $targetFile, $orderId, $userId);

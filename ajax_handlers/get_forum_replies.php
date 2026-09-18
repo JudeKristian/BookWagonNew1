@@ -25,12 +25,16 @@ if (!isset($_GET['comment_id']) || empty($_GET['comment_id'])) {
 $commentId = (int)$_GET['comment_id'];
 
 // Check if parent comment exists
-$commentCheck = $conn->query("SELECT comment_id FROM forum_comments WHERE comment_id = $commentId");
-if ($commentCheck->num_rows === 0) {
+$chkStmt = $conn->prepare("SELECT comment_id FROM forum_comments WHERE comment_id = ?");
+$chkStmt->bind_param("i", $commentId);
+$chkStmt->execute();
+if ($chkStmt->get_result()->num_rows === 0) {
+    $chkStmt->close();
     sendResponse(false, 'Invalid comment');
 }
+$chkStmt->close();
 
-// Get replies
+// Get replies with prepared statement
 $repliesQuery = "SELECT fc.*, 
                 u.firstname, 
                 u.lastname, 
@@ -40,10 +44,13 @@ $repliesQuery = "SELECT fc.*,
                  WHERE comment_id = fc.comment_id AND interaction_type = 'like') as likes
                 FROM forum_comments fc
                 LEFT JOIN users u ON fc.user_id = u.id
-                WHERE fc.parent_id = $commentId
+                WHERE fc.parent_id = ?
                 ORDER BY fc.created_at ASC";
 
-$repliesResult = $conn->query($repliesQuery);
+$stmtReplies = $conn->prepare($repliesQuery);
+$stmtReplies->bind_param("i", $commentId);
+$stmtReplies->execute();
+$repliesResult = $stmtReplies->get_result();
 $replies = [];
 
 if ($repliesResult && $repliesResult->num_rows > 0) {

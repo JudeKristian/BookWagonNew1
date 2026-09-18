@@ -76,6 +76,7 @@ if (isset($_GET['code'])) {
         $update_stmt->execute();
         $update_stmt->close();
         
+        session_regenerate_id(true);
         $_SESSION["temp_user_id"] = $id;
         $_SESSION["temp_email"] = $email;
         $_SESSION["temp_firstname"] = $db_firstName;
@@ -114,6 +115,7 @@ if (isset($_GET['code'])) {
     $stmt->close();
     
     // 4. Send them to the 2FA flow (we maintain 2FA even for Google users per exam rules)
+    unset($_SESSION['temp_2fa_otp']); // Force fresh OTP generation
     if (empty($google2fa_secret)) {
         $_SESSION["pending_2fa_setup"] = true;
         header("Location: setup_2fa.php");

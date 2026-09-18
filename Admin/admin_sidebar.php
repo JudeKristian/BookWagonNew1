@@ -9,6 +9,45 @@
 
 if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
 if (!isset($pendingSellers)) $pendingSellers = 0;
+
+// Fetch notification counts
+$pendingPaymentsCount = 0;
+$pendingBooksCount = 0;
+$pendingKYCCount = 0;
+$pendingPayoutsCount = 0;
+$pendingWithdrawsCount = 0;
+$pendingDisputesCount = 0;
+
+if (isset($conn)) {
+    // Payment Verification
+    $payStmt = $conn->query("SELECT COUNT(*) as cnt FROM orders WHERE payment_status = 'pending_verification'");
+    if ($payStmt) $pendingPaymentsCount = $payStmt->fetch_assoc()['cnt'];
+
+    // Product Approvals
+    $bookStmt = $conn->query("SELECT COUNT(*) as cnt FROM books WHERE approval_status = 'pending'");
+    if ($bookStmt) $pendingBooksCount = $bookStmt->fetch_assoc()['cnt'];
+
+    // KYC & Seller Requests
+    $kycStmt = $conn->query("SELECT COUNT(*) as cnt FROM sellers WHERE status = 'pending'");
+    if ($kycStmt) $pendingKYCCount = $kycStmt->fetch_assoc()['cnt'];
+
+    // Seller Payouts
+    $payoutStmt = $conn->query("SELECT COUNT(*) as cnt FROM seller_payouts WHERE status = 'pending'");
+    if ($payoutStmt) $pendingPayoutsCount = $payoutStmt->fetch_assoc()['cnt'];
+
+    // Renter Withdrawals
+    $withdrawStmt = $conn->query("SELECT COUNT(*) as cnt FROM wallet_withdrawals WHERE status = 'pending'");
+    if ($withdrawStmt) $pendingWithdrawsCount = $withdrawStmt->fetch_assoc()['cnt'];
+
+    // Disputes & Refunds
+    $disputeStmt = $conn->query("SELECT COUNT(*) as cnt FROM book_returns WHERE status = 'pending' OR book_condition = 'damaged'");
+    if ($disputeStmt) $pendingDisputesCount = $disputeStmt->fetch_assoc()['cnt'];
+
+    // Active Security Threats
+    $activeThreatsCount = 0;
+    $threatStmt = $conn->query("SELECT COUNT(*) as cnt FROM audit_logs WHERE (activity LIKE 'RISK%' OR action = 'RISK') AND (is_resolved = 0 OR is_resolved IS NULL)");
+    if ($threatStmt && $row = $threatStmt->fetch_assoc()) $activeThreatsCount = intval($row['cnt']);
+}
 ?>
 
 <!-- Admin Shared Styles -->
@@ -358,13 +397,58 @@ if (!isset($pendingSellers)) $pendingSellers = 0;
             <i class="fa-solid fa-users"></i>
             Manage Users
         </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/product_approval.php' : 'product_approval.php'; ?>" class="nav-item <?php echo ($currentPage === 'product_approval.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-list-check"></i>
+            Product Approvals
+            <?php if($pendingBooksCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingBooksCount; ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_kyc.php' : 'admin_kyc.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_kyc.php') ? 'active' : ''; ?>">
+            <i class="fas fa-id-card"></i>
+            ID Verifications
+            <?php if($pendingKYCCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingKYCCount; ?></span>
+            <?php endif; ?>
+        </a>
         <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_rentals.php' : 'admin_rentals.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_rentals.php') ? 'active' : ''; ?>">
-            <i class="fa-solid fa-hand-holding-dollar"></i>
+            <i class="fa-solid fa-book-open"></i>
             Escrow & Rentals
+        </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_payouts.php' : 'admin_payouts.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_payouts.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-money-bill-wave"></i>
+            Seller Payouts
+            <?php if($pendingPayoutsCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingPayoutsCount; ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_withdrawals.php' : 'admin_withdrawals.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_withdrawals.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-wallet"></i>
+            Renter Withdrawals
+            <?php if($pendingWithdrawsCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingWithdrawsCount; ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_disputes.php' : 'admin_disputes.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_disputes.php') ? 'active' : ''; ?>">
+            <i class="fas fa-handshake-angle"></i>
+            Disputes & Refunds
+            <?php if($pendingDisputesCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingDisputesCount; ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/admin_payments.php' : 'admin_payments.php'; ?>" class="nav-item <?php echo ($currentPage === 'admin_payments.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-file-invoice-dollar"></i>
+            Payment Verification
+            <?php if($pendingPaymentsCount > 0): ?>
+                <span class="nav-badge"><?php echo $pendingPaymentsCount; ?></span>
+            <?php endif; ?>
         </a>
         <a href="<?php echo (strpos($currentPage, 'admin_users') !== false) ? 'Admin/audit_logs.php' : 'audit_logs.php'; ?>" class="nav-item <?php echo ($currentPage === 'audit_logs.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-shield-halved"></i>
             Audit Logs
+            <?php if($activeThreatsCount > 0): ?>
+                <span class="nav-badge" style="background: #ef4444; color: white;"><?php echo $activeThreatsCount; ?></span>
+            <?php endif; ?>
         </a>
     </nav>
 

@@ -16,29 +16,17 @@ if (isset($_POST['toggle_2fa'])) {
     $new_status = $current_2fa_status == 1 ? 0 : 1;
 
     if ($new_status == 1) {
-        // Redirect to setup 2FA if trying to enable
-        // But first check if they already have a secret
-        $check_stmt = $conn->prepare("SELECT google2fa_secret FROM users WHERE id = ?");
-        $check_stmt->bind_param("i", $userId);
-        $check_stmt->execute();
-        $check_stmt->bind_result($existing_secret);
-        $check_stmt->fetch();
-        $check_stmt->close();
-
-        if (empty($existing_secret)) {
-            // Need to setup
-            $_SESSION["pending_2fa_setup"] = true;
-            $_SESSION["temp_user_id"] = $userId;
-            $_SESSION["temp_email"] = $_SESSION['email'];
-            header("Location: setup_2fa.php");
-            exit();
-        } else {
-            // Just enable it
-            $update_stmt = $conn->prepare("UPDATE users SET is_2fa_enabled = 1 WHERE id = ?");
-            $update_stmt->bind_param("i", $userId);
-            $update_stmt->execute();
-            $_SESSION['success_message'] = "Two-Factor Authentication has been enabled.";
-        }
+        // Redirect to setup 2FA to verify their email before enabling
+        $_SESSION["pending_2fa_setup"] = true;
+        $_SESSION["temp_user_id"] = $userId;
+        $_SESSION["temp_email"] = $_SESSION['email'];
+        // Provide other required session variables for setup_2fa.php
+        $_SESSION["temp_firstname"] = $_SESSION['firstname'] ?? '';
+        $_SESSION["temp_lastname"] = $_SESSION['lastname'] ?? '';
+        $_SESSION["temp_usertype"] = $_SESSION['usertype'] ?? 'user';
+        
+        header("Location: setup_2fa.php");
+        exit();
     } else {
         // Disable it
         $update_stmt = $conn->prepare("UPDATE users SET is_2fa_enabled = 0 WHERE id = ?");

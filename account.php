@@ -39,28 +39,42 @@ if (isset($_POST['upload_picture'])) {
         mkdir($targetDir, 0777, true);
     }
     
-    $fileName = basename($_FILES["profile_picture"]["name"]);
-    $targetFilePath = $targetDir . $userId . "_" . $fileName;
-    $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
+    $file = $_FILES["profile_picture"];
+    $fileExt = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+    $allowTypes = array('jpg', 'png', 'jpeg', 'gif', 'webp');
+    $maxSize = 5 * 1024 * 1024;
     
-    // Allow certain file formats
-    $allowTypes = array('jpg', 'png', 'jpeg', 'gif');
-    if (in_array($fileType, $allowTypes)) {
-        // Upload file to server
-        if (move_uploaded_file($_FILES["profile_picture"]["tmp_name"], $targetFilePath)) {
-            // Update profile picture path in database
-            $updateStmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
-            $updateStmt->bind_param("si", $targetFilePath, $userId);
-            $updateStmt->execute();
-            
-            // Refresh page to show updated picture
-            header("Location: account.php");
-            exit();
-        } else {
-            $uploadError = "Sorry, there was an error uploading your file.";
-        }
+    // Validate size
+    if ($file['size'] > $maxSize) {
+        $uploadError = "Profile picture exceeds maximum allowed size of 5MB.";
+    } elseif (!in_array($fileExt, $allowTypes)) {
+        $uploadError = "Sorry, only JPG, JPEG, PNG, GIF & WEBP files are allowed.";
     } else {
-        $uploadError = "Sorry, only JPG, JPEG, PNG & GIF files are allowed.";
+        // Validate MIME type
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime = $finfo !== false ? finfo_file($finfo, $file['tmp_name']) : '';
+        if ($finfo !== false) finfo_close($finfo);
+        $allowMimes = array('image/jpeg', 'image/png', 'image/gif', 'image/webp');
+        
+        if (!in_array($mime, $allowMimes)) {
+            $uploadError = "Invalid image file format.";
+        } else {
+            $uniqueFileName = "profile_" . $userId . "_" . time() . "_" . bin2hex(random_bytes(4)) . "." . $fileExt;
+            $targetFilePath = $targetDir . $uniqueFileName;
+            
+            if (move_uploaded_file($file["tmp_name"], $targetFilePath)) {
+                chmod($targetFilePath, 0644);
+                $updateStmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                $updateStmt->bind_param("si", $targetFilePath, $userId);
+                $updateStmt->execute();
+                $updateStmt->close();
+                
+                header("Location: account.php");
+                exit();
+            } else {
+                $uploadError = "Sorry, there was an error uploading your file.";
+            }
+        }
     }
 }
 
@@ -107,14 +121,95 @@ if (isset($_POST['update_address'])) {
     }
 }
 
+// Handle E-Wallet update
+if (isset($_POST['update_ewallet'])) {
+    $payout_provider = trim($_POST['payout_provider'] ?? '');
+    $payout_name = trim($_POST['payout_name'] ?? '');
+    $payout_number = trim($_POST['payout_number'] ?? '');
+    
+    // Handle QR Code Upload
+    $payout_qr_code = $user['payout_qr_code'] ?? '';
+    if (isset($_FILES['payout_qr_code']) && $_FILES['payout_qr_code']['error'] === UPLOAD_ERR_OK) {
+        $qrFile = $_FILES['payout_qr_code'];
+        $targetDir = "uploads/qr_codes/";
+        if (!file_exists($targetDir)) mkdir($targetDir, 0777, true);
+        
+        $fileExt = strtolower(pathinfo($qrFile['name'], PATHINFO_EXTENSION));
+        $allowed = ['jpg', 'jpeg', 'png', 'webp'];
+        
+        if ($qrFile['size'] <= 5 * 1024 * 1024 && in_array($fileExt, $allowed)) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mime = $finfo !== false ? finfo_file($finfo, $qrFile['tmp_name']) : '';
+            if ($finfo !== false) finfo_close($finfo);
+            $allowMimes = ['image/jpeg', 'image/png', 'image/webp'];
+            
+            if (in_array($mime, $allowMimes)) {
+                $newFileName = "qr_" . $userId . "_" . time() . "_" . bin2hex(random_bytes(4)) . "." . $fileExt;
+                $targetPath = $targetDir . $newFileName;
+                
+                if (move_uploaded_file($qrFile['tmp_name'], $targetPath)) {
+                    chmod($targetPath, 0644);
+                    $payout_qr_code = $targetPath;
+                }
+            }
+        }
+    }
+    
+    $updateStmt = $conn->prepare("UPDATE users SET payout_provider = ?, payout_name = ?, payout_number = ?, payout_qr_code = ? WHERE id = ?");
+    $updateStmt->bind_param("ssssi", $payout_provider, $payout_name, $payout_number, $payout_qr_code, $userId);
+    
+    if ($updateStmt->execute()) {
+        $_SESSION['success_message'] = "Payout details updated successfully!";
+        header("Location: account.php");
+        exit();
+    } else {
+        $_SESSION['error_message'] = "Error updating payout info: " . $conn->error;
+    }
+}
+
 // Default values if fields don't exist in database yet
 $profilePicture = $user['profile_picture'] ?? 'images/default-profile.png';
 $phone = $user['phone'] ?? '';
 $bio = $user['bio'] ?? '';
+$wallet_balance = floatval($user['wallet_balance'] ?? 0.00);
+
+// Handle Wallet Withdrawal Request
+if (isset($_POST['request_withdrawal'])) {
+    $withdraw_amount = floatval($_POST['withdraw_amount'] ?? 0);
+    
+    if ($withdraw_amount > 0 && $withdraw_amount <= $wallet_balance) {
+        $provider = $user['payout_provider'] ?? '';
+        $account_details = ($user['payout_name'] ?? '') . ' - ' . ($user['payout_number'] ?? '');
+        
+        if (empty($provider) || empty($user['payout_number'])) {
+            $_SESSION['error_message'] = "Please set up your E-Wallet details first.";
+        } else {
+            $stmt = $conn->prepare("INSERT INTO wallet_withdrawals (user_id, amount, status, payout_provider, payout_account) VALUES (?, ?, 'pending', ?, ?)");
+            $stmt->bind_param("idss", $userId, $withdraw_amount, $provider, $account_details);
+            
+            if ($stmt->execute()) {
+                $stmt2 = $conn->prepare("UPDATE users SET wallet_balance = wallet_balance - ? WHERE id = ?");
+                $stmt2->bind_param("di", $withdraw_amount, $userId);
+                $stmt2->execute();
+                
+                $_SESSION['success_message'] = "Withdrawal request for ₱" . number_format($withdraw_amount, 2) . " submitted successfully.";
+                header("Location: account.php");
+                exit();
+            }
+        }
+    } else {
+        $_SESSION['error_message'] = "Invalid withdrawal amount or insufficient balance.";
+    }
+}
+
 $country = $user['country'] ?? '';
 $city_state = $user['city_state'] ?? '';
 $postal_code = $user['postal_code'] ?? '';
 $tax_id = $user['tax_id'] ?? '';
+$payout_provider = $user['payout_provider'] ?? '';
+$payout_name = $user['payout_name'] ?? '';
+$payout_number = $user['payout_number'] ?? '';
+$payout_qr_code = $user['payout_qr_code'] ?? '';
 ?>
 
 <!DOCTYPE html>
@@ -368,6 +463,33 @@ $tax_id = $user['tax_id'] ?? '';
                     </div>
                 </div>
 
+                <!-- Unified Wallet Card -->
+                <div class="profile-card" style="background: linear-gradient(135deg, #fffbeb, #ffffff); border: 1px solid #fef3c7;">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+                        <div class="d-flex align-items-center">
+                            <div class="rounded-circle d-flex align-items-center justify-content-center text-white fw-bold shadow-sm" style="width: 60px; height: 60px; font-size: 24px; background: var(--primary-color); margin-right: 20px;">
+                                <i class="fa-solid fa-wallet"></i>
+                            </div>
+                            <div class="user-info">
+                                <h3 class="mb-1" style="font-size: 0.9rem; color: #64748b; font-weight: 700; text-transform: uppercase;">BookWagon Wallet Balance</h3>
+                                <p class="mb-0" style="font-size: 2rem; font-weight: 800; color: #0f172a;">₱<?php echo number_format($wallet_balance, 2); ?></p>
+                                <p class="text-muted mb-0" style="font-size: 0.82rem;">Use this balance for your next rental, or withdraw it to your E-Wallet.</p>
+                            </div>
+                        </div>
+                        <div>
+                            <?php if ($wallet_balance > 0): ?>
+                                <button class="btn btn-primary px-4 py-2" data-bs-toggle="modal" data-bs-target="#withdrawModal" style="border-radius: 8px;">
+                                    <i class="fa-solid fa-money-bill-transfer me-2"></i> Withdraw Funds
+                                </button>
+                            <?php else: ?>
+                                <button class="btn btn-secondary px-4 py-2" style="border-radius: 8px;" disabled>
+                                    <i class="fa-solid fa-money-bill-transfer me-2"></i> Withdraw Funds
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Personal Information Card -->
                 <div class="profile-card">
                     <div class="section-title">
@@ -442,6 +564,108 @@ $tax_id = $user['tax_id'] ?? '';
                         </div>
                     </div>
                 </div>
+
+                <!-- E-Wallet Details Card -->
+                <div class="profile-card">
+                    <div class="section-title">
+                        <h3><i class="fa-solid fa-qrcode text-primary me-2"></i>E-Wallet QR Payout Details</h3>
+                        <button class="edit-button" data-bs-toggle="modal" data-bs-target="#editEwalletModal">
+                            <i class="fa-solid fa-pen-to-square"></i> Edit
+                        </button>
+                    </div>
+                    <p class="text-muted small mb-3">These details are used by the BookWagon Admin to send your Seller earnings or refund your Rental deposits.</p>
+                    
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <div class="row info-row">
+                                <div class="col-md-6 mb-3 mb-md-0">
+                                    <div class="info-label">E-Wallet Provider</div>
+                                    <div class="info-value">
+                                        <?php if($payout_provider): ?>
+                                            <span class="badge bg-primary"><?php echo htmlspecialchars($payout_provider); ?></span>
+                                        <?php else: ?>
+                                            <span class="text-muted fst-italic">Not provided</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="info-label">Registered Name</div>
+                                    <div class="info-value"><?php echo $payout_name ? htmlspecialchars($payout_name) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
+                                </div>
+                            </div>
+                            <div class="row info-row mt-3">
+                                <div class="col-12">
+                                    <div class="info-label">Account Number</div>
+                                    <div class="info-value"><?php echo $payout_number ? htmlspecialchars($payout_number) : '<span class="text-muted fst-italic">Not provided</span>'; ?></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 text-center border-start">
+                            <div class="info-label mb-2">QR Code</div>
+                            <?php if(!empty($payout_qr_code) && file_exists($payout_qr_code)): ?>
+                                <img src="<?php echo htmlspecialchars($payout_qr_code); ?>" alt="QR Code" class="img-fluid rounded border" style="max-height: 120px;">
+                            <?php else: ?>
+                                <div class="bg-light rounded border d-flex align-items-center justify-content-center mx-auto" style="width: 100px; height: 100px;">
+                                    <i class="fa-solid fa-qrcode text-muted fa-2x"></i>
+                                </div>
+                                <small class="text-muted d-block mt-1">No QR Uploaded</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit E-Wallet Modal -->
+    <div class="modal fade" id="editEwalletModal" tabindex="-1" aria-labelledby="editEwalletModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="editEwalletModalLabel"><i class="fa-solid fa-qrcode me-2"></i>Edit E-Wallet Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form action="account.php" method="post" enctype="multipart/form-data">
+                    <div class="modal-body">
+                        <div class="alert alert-info small">
+                            <i class="fa-solid fa-circle-info me-1"></i> Ensure your Account Name matches your real name and upload a clear QR code to prevent payout delays.
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="payout_provider" class="form-label">E-Wallet Provider</label>
+                            <select class="form-select" id="payout_provider" name="payout_provider" required>
+                                <option value="" disabled <?php echo empty($payout_provider) ? 'selected' : ''; ?>>Select Provider...</option>
+                                <option value="GCash" <?php echo $payout_provider === 'GCash' ? 'selected' : ''; ?>>GCash</option>
+                                <option value="Maya" <?php echo $payout_provider === 'Maya' ? 'selected' : ''; ?>>Maya</option>
+                                <option value="Seabank" <?php echo $payout_provider === 'Seabank' ? 'selected' : ''; ?>>Seabank</option>
+                                <option value="Gotyme" <?php echo $payout_provider === 'Gotyme' ? 'selected' : ''; ?>>GoTyme</option>
+                                <option value="Other" <?php echo $payout_provider === 'Other' ? 'selected' : ''; ?>>Other / Bank Transfer</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="payout_name" class="form-label">Registered Name</label>
+                            <input type="text" class="form-control" id="payout_name" name="payout_name" value="<?php echo htmlspecialchars($payout_name); ?>" placeholder="e.g. Juan Dela Cruz" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="payout_number" class="form-label">Account Number</label>
+                            <input type="text" class="form-control bw-phone" id="payout_number" name="payout_number" value="<?php echo htmlspecialchars($payout_number); ?>" placeholder="0917 123 4567" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="payout_qr_code" class="form-label">Upload QR Code <span class="text-muted fw-normal">(Recommended)</span></label>
+                            <input type="file" class="form-control" id="payout_qr_code" name="payout_qr_code" accept="image/*">
+                            <?php if(!empty($payout_qr_code)): ?>
+                                <small class="text-success mt-1 d-block"><i class="fa-solid fa-check-circle"></i> QR Code already uploaded. Uploading a new one will replace it.</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="update_ewallet" class="btn" style="background-color: var(--primary-color); color: white;">Save Payout Details</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -507,7 +731,7 @@ $tax_id = $user['tax_id'] ?? '';
                             </div>
                             <div class="col-md-6">
                                 <label for="phone" class="form-label">Phone</label>
-                                <input type="text" class="form-control" id="phone" name="phone" value="<?php echo $phone; ?>">
+                                <input type="text" class="form-control bw-phone" id="phone" name="phone" value="<?php echo $phone; ?>">
                             </div>
                         </div>
                         
@@ -549,7 +773,7 @@ $tax_id = $user['tax_id'] ?? '';
                         <div class="row mb-3">
                             <div class="col-md-6">
                                 <label for="postal_code" class="form-label">Postal Code</label>
-                                <input type="text" class="form-control" id="postal_code" name="postal_code" value="<?php echo $postal_code; ?>">
+                                <input type="text" class="form-control bw-postal" id="postal_code" name="postal_code" value="<?php echo $postal_code; ?>">
                             </div>
                             <div class="col-md-6">
                                 <label for="tax_id" class="form-label">TAX ID</label>
@@ -560,6 +784,52 @@ $tax_id = $user['tax_id'] ?? '';
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="submit" name="update_address" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Withdraw Funds Modal -->
+    <div class="modal fade" id="withdrawModal" tabindex="-1" aria-labelledby="withdrawModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="withdrawModalLabel"><i class="fa-solid fa-money-bill-transfer text-primary me-2"></i> Withdraw Wallet Balance</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form action="account.php" method="post">
+                    <div class="modal-body">
+                        <div class="alert alert-info" style="font-size: 13px;">
+                            Your funds will be transferred to your saved E-Wallet account. If you need to change where this goes, update your E-Wallet details below first.
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label text-muted" style="font-size: 12px; font-weight: 600; text-transform: uppercase;">Available Balance</label>
+                            <h3 style="color: #0f172a; font-weight: 800;">₱<?php echo number_format($wallet_balance, 2); ?></h3>
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="withdraw_amount" class="form-label text-muted" style="font-size: 12px; font-weight: 600; text-transform: uppercase;">Amount to Withdraw (₱)</label>
+                            <input type="number" class="form-control form-control-lg" id="withdraw_amount" name="withdraw_amount" min="1" max="<?php echo $wallet_balance; ?>" step="0.01" value="<?php echo $wallet_balance; ?>" required style="font-weight: 600;">
+                        </div>
+
+                        <div class="p-3 mb-3" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+                            <label class="form-label text-muted mb-2" style="font-size: 12px; font-weight: 600; text-transform: uppercase;">Transfer Destination</label>
+                            <div class="d-flex align-items-center">
+                                <div style="font-size: 24px; color: var(--primary-color); margin-right: 15px;">
+                                    <i class="fa-solid fa-mobile-screen"></i>
+                                </div>
+                                <div>
+                                    <div style="font-weight: 700; color: #0f172a;"><?php echo htmlspecialchars($payout_provider ?: 'Not Set'); ?></div>
+                                    <div style="font-size: 13px; color: #64748b;"><?php echo htmlspecialchars($payout_name ?: 'Not Set'); ?> &middot; <?php echo htmlspecialchars($payout_number ?: 'Not Set'); ?></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer border-0 pt-0">
+                        <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="request_withdrawal" class="btn btn-primary px-4" <?php echo empty($payout_provider) ? 'disabled' : ''; ?>>Confirm Withdrawal</button>
                     </div>
                 </form>
             </div>

@@ -493,7 +493,7 @@ foreach ($orders as $order) {
         $toPay[] = $order;
     } 
     elseif (($order['payment_status'] == 'paid' || $order['payment_method'] == 'cod' || $order['payment_method'] == 'pickup') 
-            && ($order['item_status'] == 'pending' || $order['item_status'] == 'processing')) {
+            && ($order['item_status'] == 'pending' || $order['item_status'] == 'processing' || $order['item_status'] == 'pending_meetup')) {
         $toShip[] = $order;
     }
     elseif ($order['item_status'] == 'shipped' || $order['item_status'] == 'shipped_pending_confirmation') {
@@ -962,7 +962,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                         <?php endif; ?>
                     </a>
                     <a href="?tab=to_ship" class="order-tab <?php echo $activeTab == 'to_ship' ? 'active' : ''; ?>">
-                        To Ship
+                        Pending Meet-up
                         <?php if ($toShipCount > 0): ?>
                         <span class="tab-count"><?php echo $toShipCount; ?></span>
                         <?php endif; ?>
@@ -1042,9 +1042,12 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                                 $statusText = "To Pay";
                                 $statusClass = "status-to-pay";
                             } 
-                            elseif (($order['payment_status'] == 'paid' || $order['payment_method'] == 'cod' || $order['payment_method'] == 'pickup') 
-                                    && ($order['item_status'] == 'pending' || $order['item_status'] == 'processing')) {
+                            elseif ($order['item_status'] == 'pending' || $order['item_status'] == 'processing') {
                                 $statusText = "To Ship";
+                                $statusClass = "status-to-ship";
+                            }
+                            elseif ($order['item_status'] == 'pending_meetup') {
+                                $statusText = "Pending Meet-up";
                                 $statusClass = "status-to-ship";
                             }
                             elseif ($order['item_status'] == 'shipped') {
@@ -1097,6 +1100,19 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             </div>
                             
                             <div class="order-actions">
+                                <?php if ($order['item_status'] == 'pending_meetup'): ?>
+                                <button type="button" 
+                                        class="order-action-btn btn-meetup-handshake"
+                                        style="background-color: var(--primary-color); color: white;"
+                                        data-order-id="<?php echo $order['order_id']; ?>"
+                                        data-item-id="<?php echo $order['item_id']; ?>"
+                                        data-buyer-id="<?php echo $userId; ?>"
+                                        data-bs-toggle="modal" data-bs-target="#handshakeModal"
+                                        onclick="initHandshake(this)">
+                                    <i class="fas fa-handshake me-1"></i> Receive Book
+                                </button>
+                                <?php endif; ?>
+                                
                                 <?php if ($order['item_status'] == 'shipped' || $order['item_status'] == 'shipped_pending_confirmation'): ?>
                                 <button type="button" 
                                         class="order-action-btn btn-confirm-receipt btn-receive-with-inspection"
@@ -1216,6 +1232,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                                     data-start="<?php echo date('M j, Y', strtotime($rental['rental_date'])); ?>"
                                     data-due="<?php echo date('M j, Y', strtotime($rental['due_date'])); ?>"
                                     data-fee="<?php echo number_format($rental['total_price'], 2); ?>"
+                                    data-token="<?php echo $rental['return_token']; ?>"
                                     data-seller="<?php echo htmlspecialchars(!empty($rental['username']) ? $rental['username'] : ($rental['firstname'] . ' ' . $rental['lastname'])); ?>">
                                 Return QR
                             </button>
@@ -1228,6 +1245,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                                 data-bs-toggle="modal" 
                                 data-bs-target="#returnBookModal"
                                 data-rental-id="<?php echo $rental['rental_id']; ?>"
+                                data-book-id="<?php echo $rental['book_id']; ?>"
                                 data-book-title="<?php echo htmlspecialchars($rental['title']); ?>"
                                 data-book-author="<?php echo htmlspecialchars($rental['author']); ?>"
                                 data-book-image="<?php echo $rental['cover_image']; ?>"
@@ -1297,22 +1315,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             This rental is past its due date. Please return promptly to prevent additional fees.
                         </div>
 
-                        <!-- Return Method Buttons (Simple & Clean, No Icons) -->
-                        <div class="mb-3">
-                            <label class="form-label fw-bold mb-2" style="font-size: 0.78rem; color: #0f172a; text-transform: uppercase;">
-                                Handover Method
-                            </label>
-                            <div class="d-flex gap-2">
-                                <button type="button" class="return-method-btn active" id="method_btn_dropoff" onclick="selectReturnMethod('dropoff')">
-                                    Drop-off / Meet-up
-                                </button>
-                                <button type="button" class="return-method-btn" id="method_btn_pickup" onclick="selectReturnMethod('pickup')">
-                                    Courier Pickup (₱50)
-                                </button>
-                            </div>
-                            <input class="d-none" type="radio" name="return_method" id="return_dropoff" value="dropoff" checked>
-                            <input class="d-none" type="radio" name="return_method" id="return_pickup" value="pickup">
-                        </div>
+                        <input type="hidden" name="return_method" id="return_dropoff" value="dropoff">
 
                         <!-- Drop-off & Meet-up Section -->
                         <div id="dropoff_locations" class="mb-3">
@@ -1348,35 +1351,6 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                             </div>
                         </div>
 
-                        <!-- Pickup Section (Hidden by default) -->
-                        <div id="pickup_schedule" class="mb-3 d-none">
-                            <div class="row g-2 mb-2">
-                                <div class="col-6">
-                                    <label for="pickup_date" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Pickup Date</label>
-                                    <input type="date" class="form-control form-control-sm" id="pickup_date" name="pickup_date" min="" style="font-size: 0.82rem;" disabled>
-                                </div>
-                                <div class="col-6">
-                                    <label for="pickup_time" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Time Slot</label>
-                                    <select class="form-select form-select-sm" id="pickup_time" name="pickup_time" style="font-size: 0.82rem;" disabled>
-                                        <option value="">Select time</option>
-                                        <option value="morning">Morning (9AM - 12PM)</option>
-                                        <option value="afternoon">Afternoon (1PM - 5PM)</option>
-                                        <option value="evening">Evening (6PM - 8PM)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="pickup_address" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Pickup Address</label>
-                                <textarea class="form-control form-control-sm" id="pickup_address" name="pickup_address" rows="2" placeholder="Complete address for courier collection" style="font-size: 0.82rem;" disabled></textarea>
-                            </div>
-                            <div class="mb-2">
-                                <label for="pickup_notes" class="form-label fw-semibold" style="font-size: 0.8rem; color: #475569;">Notes / Landmark (Optional)</label>
-                                <input type="text" class="form-control form-control-sm" id="pickup_notes" name="pickup_notes" placeholder="Landmark, gate code, etc." style="font-size: 0.82rem;" disabled>
-                            </div>
-                            <div class="text-muted" style="font-size: 0.75rem;">
-                                Note: A ₱50 courier fee will be charged for doorstep pickup.
-                            </div>
-                        </div>
 
                         <!-- Book Condition Declaration Checkbox -->
                         <div class="p-2-5" style="background: #ffffff; border: 1px solid #e9ecef; border-radius: 6px;">
@@ -1436,8 +1410,12 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
         </div>
     </div>
 
+
+
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Scroll to highlighted rental if present
@@ -1470,38 +1448,69 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                 }
             };
 
-            // Method card click handler
-            window.selectReturnMethod = function(method) {
-                const radio = document.querySelector(`input[name="return_method"][value="${method}"]`);
-                if (radio) {
-                    radio.checked = true;
-                    radio.dispatchEvent(new Event('change'));
-                }
-                const btnDropoff = document.getElementById('method_btn_dropoff');
-                const btnPickup = document.getElementById('method_btn_pickup');
-                if (method === 'dropoff') {
-                    if (btnDropoff) btnDropoff.classList.add('active');
-                    if (btnPickup) btnPickup.classList.remove('active');
-                } else {
-                    if (btnPickup) btnPickup.classList.add('active');
-                    if (btnDropoff) btnDropoff.classList.remove('active');
-                }
-            };
 
             // Helper to render default drop-off / meet-up locations
             function renderDefaultDropoffLocations(container, sellerData) {
                 let html = '';
+                let hasSelectedDefault = false;
 
-                // Option 1: Campus Meet-up (Recommended)
+                // Option 1: Seller's Listing Meet-up Location (if specified)
+                if (sellerData && sellerData.book_meetup && sellerData.book_meetup.trim() !== '') {
+                    const spot = sellerData.book_meetup.trim();
+                    html += `
+                        <div class="mb-2">
+                            <label class="loc-option-label d-block cursor-pointer" for="loc_seller_pref">
+                                <div class="d-flex align-items-start gap-2">
+                                    <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="loc_seller_pref" value="${spot.replace(/"/g, '&quot;')}" checked>
+                                    <div style="font-size: 0.82rem; line-height: 1.4;">
+                                        <div class="fw-bold text-dark">${spot} <span class="badge bg-warning text-dark border ms-1" style="font-size: 0.68rem;">Original Listing Spot</span></div>
+                                        <div class="text-muted" style="font-size: 0.77rem;">
+                                            Seller's preferred meet-up location for this book.
+                                        </div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    `;
+                    hasSelectedDefault = true;
+                }
+
+                // Option 2: Original Handover Location (from order checkout)
+                if (sellerData && sellerData.order_pickup && sellerData.order_pickup.trim() !== '') {
+                    const origHandover = sellerData.order_pickup.trim();
+                    const isChecked = !hasSelectedDefault ? 'checked' : '';
+                    if (isChecked) hasSelectedDefault = true;
+
+                    html += `
+                        <div class="mb-2">
+                            <label class="loc-option-label d-block cursor-pointer" for="loc_orig_handover">
+                                <div class="d-flex align-items-start gap-2">
+                                    <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="loc_orig_handover" value="${origHandover.replace(/"/g, '&quot;')}" ${isChecked}>
+                                    <div style="font-size: 0.82rem; line-height: 1.4;">
+                                        <div class="fw-bold text-dark">${origHandover} <span class="badge bg-info text-dark border ms-1" style="font-size: 0.68rem;">Previous Handover Location</span></div>
+                                        <div class="text-muted" style="font-size: 0.77rem;">
+                                            Location used during initial checkout/handover.
+                                        </div>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    `;
+                }
+
+                // Option 3: Campus Meet-up (Landmark)
+                const isCampusChecked = !hasSelectedDefault ? 'checked' : '';
+                if (isCampusChecked) hasSelectedDefault = true;
+
                 html += `
                     <div class="mb-2">
                         <label class="loc-option-label d-block cursor-pointer" for="loc_campus">
                             <div class="d-flex align-items-start gap-2">
-                                <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="loc_campus" value="Campus Meet-up" checked>
+                                <input class="form-check-input mt-1" type="radio" name="dropoff_location" id="loc_campus" value="Campus Meet-up" ${isCampusChecked}>
                                 <div style="font-size: 0.82rem; line-height: 1.4;">
-                                    <div class="fw-bold text-dark">Campus Meet-up <span class="badge bg-light text-primary border ms-1" style="font-size: 0.68rem;">Recommended</span></div>
+                                    <div class="fw-bold text-dark">Campus Meet-up <span class="badge bg-light text-primary border ms-1" style="font-size: 0.68rem;">Campus Landmark</span></div>
                                     <div class="text-muted" style="font-size: 0.77rem;">
-                                        Direct student-to-student handover on campus (Library lobby, student lounge, or main gate).
+                                        Direct student-to-student handover on campus (Library lobby, student lounge, cafeteria, or main gate).
                                     </div>
                                 </div>
                             </div>
@@ -1509,8 +1518,8 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                     </div>
                 `;
 
-                // Option 2: Seller's Registered Location (if available)
-                if (sellerData && sellerData.success && sellerData.address) {
+                // Option 4: Seller's Registered Location (if available)
+                if (sellerData && sellerData.success && sellerData.address && sellerData.address.address) {
                     const sellerFullAddress = `${sellerData.address.name}, ${sellerData.address.address}, ${sellerData.address.city} ${sellerData.address.postal_code}`;
                     html += `
                         <div class="mb-2">
@@ -1530,7 +1539,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                     `;
                 }
 
-                // Option 3: BookWagon Official Hub
+                // Option 5: BookWagon Official Hub
                 html += `
                     <div class="mb-1">
                         <label class="loc-option-label d-block cursor-pointer" for="location1">
@@ -1557,6 +1566,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                 button.addEventListener('click', function() {
                     // Get data from button attributes
                     const rentalId = this.getAttribute('data-rental-id');
+                    const bookId = this.getAttribute('data-book-id') || 0;
                     const bookTitle = this.getAttribute('data-book-title');
                     const bookAuthor = this.getAttribute('data-book-author');
                     const bookImage = this.getAttribute('data-book-image');
@@ -1575,10 +1585,7 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                     const condBox = document.getElementById('condition_checkbox');
                     if (condBox) condBox.checked = false;
 
-                    // Reset to dropoff by default
-                    if (window.selectReturnMethod) {
-                        window.selectReturnMethod('dropoff');
-                    }
+
                     
                     // Show overdue notice if applicable
                     const overdueNotice = document.getElementById('overdue_notice');
@@ -1590,11 +1597,11 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                         }
                     }
                     
-                    // Fetch seller's address and update dropoff locations
+                    // Fetch seller's address, book meetup location, and order handover location
                     const container = document.getElementById('dropoff_locations_container');
                     container.innerHTML = '<div class="text-center text-muted py-2" style="font-size: 0.8rem;">Loading location details...</div>';
 
-                    fetch(`get_seller_address.php?seller_id=${sellerId}`)
+                    fetch(`get_seller_address.php?seller_id=${sellerId}&book_id=${bookId}&rental_id=${rentalId}`)
                         .then(response => response.json())
                         .then(data => {
                             renderDefaultDropoffLocations(container, data);
@@ -1606,53 +1613,6 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                 });
             });
             
-            // Toggle between Drop-off and Pickup sections
-            const returnMethodRadios = document.querySelectorAll('input[name="return_method"]');
-            const dropoffLocations = document.getElementById('dropoff_locations');
-            const pickupSchedule = document.getElementById('pickup_schedule');
-            const pickupFields = pickupSchedule ? pickupSchedule.querySelectorAll('input, select, textarea') : [];
-                
-            returnMethodRadios.forEach(radio => {
-                radio.addEventListener('change', function() {
-                    const method = this.value;
-                    const btnDropoff = document.getElementById('method_btn_dropoff');
-                    const btnPickup = document.getElementById('method_btn_pickup');
-
-                    if (method === 'dropoff') {
-                        if (btnDropoff) btnDropoff.classList.add('active');
-                        if (btnPickup) btnPickup.classList.remove('active');
-                        if (dropoffLocations) dropoffLocations.classList.remove('d-none');
-                        if (pickupSchedule) pickupSchedule.classList.add('d-none');
-                        
-                        // Disable pickup fields to prevent form submission
-                        pickupFields.forEach(field => {
-                            field.disabled = true;
-                            field.required = false;
-                        });
-                    } else {
-                        if (btnPickup) btnPickup.classList.add('active');
-                        if (btnDropoff) btnDropoff.classList.remove('active');
-                        if (dropoffLocations) dropoffLocations.classList.add('d-none');
-                        if (pickupSchedule) pickupSchedule.classList.remove('d-none');
-                        
-                        // Enable pickup fields
-                        pickupFields.forEach(field => {
-                            field.disabled = false;
-                            if (field.id !== 'pickup_notes') { // Notes are optional
-                                field.required = true;
-                            }
-                        });
-                    }
-                });
-            });
-            
-            // Set minimum date for pickup
-            const pickupDateField = document.getElementById('pickup_date');
-            if (pickupDateField) {
-                const tomorrow = new Date();
-                tomorrow.setDate(tomorrow.getDate() + 1);
-                pickupDateField.min = tomorrow.toISOString().split('T')[0];
-            }
 
             // Helper for safe element assignment
             function safeSet(id, prop, value) {
@@ -1724,11 +1684,13 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
                     const startDate = this.getAttribute('data-start') || 'N/A';
                     const dueDate = this.getAttribute('data-due') || 'N/A';
                     const seller = this.getAttribute('data-seller') || 'Owner';
+                    const token = this.getAttribute('data-token') || '';
 
                     const payload = {
                         cert: "BOOKWAGON_RENTAL_RETURN_RECEIPT",
                         rental_id: rentalId,
                         order_id: orderId,
+                        token: token,
                         book: title,
                         seller: seller,
                         condition: condition,
@@ -1896,5 +1858,172 @@ $highlightRentalId = isset($_GET['highlight_rental']) ? intval($_GET['highlight_
             </div>
         </div>
     </div>
+    <!-- Meet-up Handshake Modal (Single QR) -->
+    <div class="modal fade" id="handshakeModal" tabindex="-1" aria-labelledby="handshakeModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold" id="handshakeModalLabel">Receive Book</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" onclick="stopScanner()"></button>
+                </div>
+                <div class="modal-body text-center py-3">
+                    
+                    <!-- Scanner Section -->
+                    <div id="scanner-section">
+                        <p class="text-muted small mb-3">Scan the Seller's QR code to confirm handover.</p>
+                        <div id="qr-reader" style="width: 100%; max-width: 400px; margin: 0 auto;"></div>
+                        
+                        <!-- Manual Override -->
+                        <div class="mt-4 pt-3 border-top">
+                            <p class="text-muted small mb-2"><i class="fas fa-info-circle"></i> Trouble scanning?</p>
+                            <button type="button" class="btn btn-outline-secondary btn-sm w-100 fw-bold" onclick="showConditionForm()">Manually Book Received</button>
+                        </div>
+                    </div>
+
+                    <!-- Condition Check Form (Hidden until Scanned or Manual Override) -->
+                    <div id="qr-result" class="mt-3" style="display: none;">
+                        <div class="alert alert-success fw-semibold mb-2" id="scan-success-alert" style="display:none;"><i class="fas fa-check-circle me-1"></i> Seller QR Scanned!</div>
+                        <div class="text-start p-3 bg-light rounded border mb-3">
+                            <h6 class="fw-bold mb-2">Check Book Condition</h6>
+                            <p class="small text-muted mb-3">Please physically inspect the book before confirming.</p>
+                            
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="renter_condition_check" required>
+                                <label class="form-check-label fw-semibold" for="renter_condition_check">
+                                    I confirm the book is in good condition. <span class="text-danger">*</span>
+                                </label>
+                            </div>
+
+                            <textarea id="renter_condition_comments" class="form-control form-control-sm mb-3" rows="2" placeholder="Optional comments..."></textarea>
+                            
+                            <input type="hidden" id="hs_order_id">
+                            <input type="hidden" id="hs_item_id">
+                            <button type="button" class="btn w-100 fw-bold" style="background-color: var(--success-color); color: white; padding: 12px;" onclick="submitConditionCheck()">Submit Confirmation</button>
+                        </div>
+                    </div>
+
+                    <!-- Final Success Message -->
+                    <div id="renter-qr-container" class="mt-3 text-center" style="display: none;">
+                        <div class="alert alert-success mb-2">
+                            <i class="fas fa-check-circle fs-2 mb-2 d-block"></i>
+                            <strong>Confirmed!</strong>
+                        </div>
+                        <p class="small text-muted">You have successfully confirmed receipt of the book.<br>The Seller will now finalize the transaction on their end.</p>
+                        <button type="button" class="btn btn-dark w-100 mt-2 fw-bold" onclick="window.location.reload()">Done</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script>
+        let html5QrcodeScanner = null;
+        let activeOrderId = null;
+        let activeItemId = null;
+        
+        function showConditionForm(isScan = false) {
+            stopScanner();
+            document.getElementById('scanner-section').style.display = 'none';
+            document.getElementById('qr-result').style.display = 'block';
+            if (isScan) {
+                document.getElementById('scan-success-alert').style.display = 'block';
+            }
+        }
+
+        function initHandshake(btn) {
+            activeOrderId = btn.getAttribute('data-order-id');
+            activeItemId = btn.getAttribute('data-item-id');
+            
+            // Set hidden inputs for receive form
+            document.getElementById('hs_order_id').value = activeOrderId;
+            document.getElementById('hs_item_id').value = activeItemId;
+            
+            // Reset UI
+            document.getElementById('scanner-section').style.display = 'block';
+            document.getElementById('qr-result').style.display = 'none';
+            document.getElementById('scan-success-alert').style.display = 'none';
+            document.getElementById('renter-qr-container').style.display = 'none';
+            document.getElementById('renter_condition_check').checked = false;
+            document.getElementById('renter_condition_comments').value = '';
+            
+            startScanner();
+        }
+
+        function startScanner() {
+            if (html5QrcodeScanner) return; // Already running
+            html5QrcodeScanner = new Html5QrcodeScanner("qr-reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+            html5QrcodeScanner.render(onScanSuccess, onScanError);
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear().catch(error => {
+                    console.error("Failed to clear scanner.", error);
+                });
+                html5QrcodeScanner = null;
+            }
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            try {
+                const data = JSON.parse(decodedText);
+                if (data.action === 'seller_handover' && data.order_id == activeOrderId && data.item_id == activeItemId) {
+                    showConditionForm(true);
+                } else {
+                    alert("Invalid QR Code for this specific book.");
+                }
+            } catch (e) {
+                alert("Unrecognized QR format.");
+            }
+        }
+        
+        function onScanError(errorMessage) {}
+
+        function submitConditionCheck() {
+            if (!document.getElementById('renter_condition_check').checked) {
+                alert("You must confirm the book is in good condition.");
+                return;
+            }
+
+            const comments = document.getElementById('renter_condition_comments').value.trim();
+            
+            const btn = document.querySelector('button[onclick="submitConditionCheck()"]');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+            
+            const formData = new FormData();
+            formData.append('order_id', document.getElementById('hs_order_id').value);
+            formData.append('item_id', document.getElementById('hs_item_id').value);
+            formData.append('comments', comments);
+            
+            fetch('process_handover_condition.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('qr-result').style.display = 'none';
+                    document.getElementById('renter-qr-container').style.display = 'block';
+                } else {
+                    alert(data.message || 'An error occurred.');
+                    btn.disabled = false;
+                    btn.innerHTML = 'Submit Confirmation';
+                }
+            })
+            .catch(err => {
+                alert('Connection error.');
+                btn.disabled = false;
+                btn.innerHTML = 'Submit Confirmation';
+            });
+        }
+
+        document.getElementById('handshakeModal').addEventListener('hidden.bs.modal', function () {
+            stopScanner();
+        });
+    </script>
 </body>
 </html>

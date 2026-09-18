@@ -10,6 +10,7 @@ if(!isset($_SESSION["admin_loggedin"]) || $_SESSION["admin_loggedin"] !== true){
 
 // Include database connection
 require_once "db_connect.php";
+require_once "../includes/notification_helper.php";
 
 // Check if ID is provided
 if(!isset($_GET['id']) || empty($_GET['id'])) {
@@ -64,6 +65,10 @@ if(isset($_POST['action'])) {
             
             $success_message = "Seller application approved successfully!";
             
+            // Send notification
+            $notifContent = "Congratulations! Your seller application for '" . $seller['shop_name'] . "' has been approved. You can now start listing books.";
+            sendNotification($conn, $seller['user_id'], $_SESSION['admin_id'] ?? 1, 'seller_approved', $notifContent);
+            
             // Refresh seller data
             $stmt = $conn->prepare($sql);
             $stmt->bind_param("i", $id);
@@ -84,6 +89,10 @@ if(isset($_POST['action'])) {
         
         if($stmt->execute()) {
             $success_message = "Seller application rejected.";
+            
+            // Send notification
+            $notifContent = "Your seller application for '" . $seller['shop_name'] . "' was not approved at this time. Please check your application status or contact support for more details.";
+            sendNotification($conn, $seller['user_id'], $_SESSION['admin_id'] ?? 1, 'seller_rejected', $notifContent);
             
             // Refresh seller data
             $stmt = $conn->prepare($sql);

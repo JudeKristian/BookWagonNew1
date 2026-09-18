@@ -6,8 +6,8 @@ include("connect.php");
 $mode = isset($_GET['mode']) && $_GET['mode'] === 'seller' ? 'seller' : 'buyer';
 
 // Define which notification types belong to each mode
-$buyerTypes = ['buddy_request', 'buddy_accepted', 'order_shipped', 'order_delivered', 'rental_approved', 'rental_due', 'payment_confirmed'];
-$sellerTypes = ['order_placed', 'order_update', 'rental_request', 'return_request', 'book_review', 'new_inquiry'];
+$buyerTypes = ['buddy_request', 'buddy_accepted', 'order_shipped', 'order_delivered', 'rental_approved', 'rental_due', 'payment_confirmed', 'seller_approved', 'seller_rejected'];
+$sellerTypes = ['order_placed', 'order_update', 'rental_request', 'return_request', 'book_review', 'new_inquiry', 'product_approved', 'product_rejected'];
 $activeTypes = $mode === 'seller' ? $sellerTypes : $buyerTypes;
 $typeList = "'" . implode("','", $activeTypes) . "'";
 
@@ -68,6 +68,14 @@ function getNotificationUrl($notification) {
             return 'messages.php';
         case 'book_review':
             return 'Manage_books.php';
+        case 'product_approved':
+        case 'product_rejected':
+            return 'Manage_books.php';
+        // Seller application results
+        case 'seller_approved':
+            return 'seller_dashboard.php';
+        case 'seller_rejected':
+            return 'seller_request.php';
         default:
             return '#';
     }
@@ -298,6 +306,22 @@ foreach($notifications as $notification) {
             margin-bottom: 0.5rem;
             font-size: 1.1rem;
         }
+
+        /* Seller application result notification styles */
+        .notification-item.seller-approved-notif {
+            background-color: #f0fff4;
+            border-left: 4px solid #27ae60;
+        }
+        .notification-item.seller-approved-notif:hover {
+            background-color: #e6faf0;
+        }
+        .notification-item.seller-rejected-notif {
+            background-color: #fff5f5;
+            border-left: 4px solid #dc3545;
+        }
+        .notification-item.seller-rejected-notif:hover {
+            background-color: #ffe8e8;
+        }
     </style>
 </head>
 <body>
@@ -333,13 +357,21 @@ foreach($notifications as $notification) {
             <div class="card-body p-0">
                 <?php if(count($notifications) > 0): ?>
                     <?php foreach($notifications as $notification): ?>
-                        <div class="notification-item <?php echo !$notification['is_read'] ? 'unread' : ''; ?>" data-notification-id="<?php echo $notification['id']; ?>">
+                        <div class="notification-item <?php echo !$notification['is_read'] ? 'unread' : ''; ?> <?php if($notification['type']==='seller_approved') echo 'seller-approved-notif'; elseif($notification['type']==='seller_rejected') echo 'seller-rejected-notif'; ?>" data-notification-id="<?php echo $notification['id']; ?>">
                             <div class="notification-avatar">
-                                <?php if($notification['profile_picture'] && file_exists($notification['profile_picture'])): ?>
+                                <?php if($notification['type'] === 'seller_approved'): ?>
+                                    <div class="default-avatar" style="background-color: #27ae60;">
+                                        <i class="fas fa-check"></i>
+                                    </div>
+                                <?php elseif($notification['type'] === 'seller_rejected'): ?>
+                                    <div class="default-avatar" style="background-color: #dc3545;">
+                                        <i class="fas fa-times"></i>
+                                    </div>
+                                <?php elseif($notification['profile_picture'] && file_exists($notification['profile_picture'])): ?>
                                     <img src="<?php echo $notification['profile_picture']; ?>" alt="Avatar">
                                 <?php else: ?>
                                     <div class="default-avatar">
-                                        <?php echo substr($notification['firstname'], 0, 1); ?>
+                                        <?php echo substr($notification['firstname'] ?? 'B', 0, 1); ?>
                                     </div>
                                 <?php endif; ?>
                             </div>

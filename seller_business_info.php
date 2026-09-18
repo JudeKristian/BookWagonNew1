@@ -370,7 +370,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     
                     <div class="form-group">
                         <label for="business_phone" class="form-label required">Business Phone Number</label>
-                        <input type="tel" class="form-control" id="business_phone" name="business_phone" required>
+                        <input type="tel" class="form-control bw-phone" id="business_phone" name="business_phone" required>
                     </div>
                 </div>
                 
@@ -391,5 +391,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/bw-format.js"></script>
 </body>
 </html>

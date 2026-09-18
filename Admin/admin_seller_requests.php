@@ -6,6 +6,7 @@ if(!isset($_SESSION["admin_loggedin"]) || $_SESSION["admin_loggedin"] !== true){
 }
 
 require_once "db_connect.php";
+require_once "../includes/notification_helper.php";
 
 // Get pending count for sidebar badge
 $pendingSellers = 0;
@@ -18,7 +19,7 @@ if(isset($_GET['action']) && isset($_GET['id'])) {
     $seller_id = $_GET['id'];
     
     if($action == 'approve') {
-        $user_query = "SELECT user_id FROM sellers WHERE id = ?";
+        $user_query = "SELECT user_id, shop_name FROM sellers WHERE id = ?";
         $stmt = $conn->prepare($user_query);
         $stmt->bind_param("i", $seller_id);
         $stmt->execute();
@@ -26,6 +27,7 @@ if(isset($_GET['action']) && isset($_GET['id'])) {
         
         if($row = $result->fetch_assoc()) {
             $user_id = $row['user_id'];
+            $shop_name = $row['shop_name'];
             $conn->begin_transaction();
             try {
                 $stmt = $conn->prepare("UPDATE sellers SET status = 'approved' WHERE id = ?");
@@ -38,18 +40,37 @@ if(isset($_GET['action']) && isset($_GET['id'])) {
                 
                 $conn->commit();
                 $success_message = "Seller request approved successfully!";
+                
+                // Send notification to user
+                $notifContent = "Congratulations! Your seller application for '" . $shop_name . "' has been approved. You can now start listing books.";
+                sendNotification($conn, $user_id, $_SESSION['admin_id'] ?? 1, 'seller_approved', $notifContent);
             } catch (Exception $e) {
                 $conn->rollback();
                 $error_message = "Error: " . $e->getMessage();
             }
         }
     } elseif($action == 'reject') {
-        $stmt = $conn->prepare("UPDATE sellers SET status = 'rejected' WHERE id = ?");
+        $user_query = "SELECT user_id, shop_name FROM sellers WHERE id = ?";
+        $stmt = $conn->prepare($user_query);
         $stmt->bind_param("i", $seller_id);
-        if($stmt->execute()) {
-            $success_message = "Seller request rejected.";
-        } else {
-            $error_message = "Error updating record: " . $conn->error;
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        if($row = $result->fetch_assoc()) {
+            $user_id = $row['user_id'];
+            $shop_name = $row['shop_name'];
+            
+            $stmt = $conn->prepare("UPDATE sellers SET status = 'rejected' WHERE id = ?");
+            $stmt->bind_param("i", $seller_id);
+            if($stmt->execute()) {
+                $success_message = "Seller request rejected.";
+                
+                // Send notification to user
+                $notifContent = "Your seller application for '" . $shop_name . "' was not approved at this time. Please check your application status or contact support for more details.";
+                sendNotification($conn, $user_id, $_SESSION['admin_id'] ?? 1, 'seller_rejected', $notifContent);
+            } else {
+                $error_message = "Error updating record: " . $conn->error;
+            }
         }
     }
 }

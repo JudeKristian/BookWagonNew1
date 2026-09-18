@@ -1,4 +1,7 @@
-<?php $current_page = basename($_SERVER['PHP_SELF']); ?>
+<?php 
+if (isset($is_guest) && $is_guest) return;
+$current_page = basename($_SERVER['PHP_SELF']); 
+?>
 <style>
     .custom-nav-tabs {
         border-bottom: 1px solid #e2e8f0;
@@ -79,7 +82,7 @@
             </a>
         </li>
         <li class="nav-item">
-            <a class="nav-link <?php echo ($current_page == 'bookswap.php') ? 'active' : ''; ?>" href="bookswap.php">
+            <a class="nav-link <?php echo ($current_page == 'bookswap.php') ? 'active' : ''; ?>" href="javascript:void(0);" onclick="alert('Book Swap feature is currently under development. Stay tuned for future updates!');">
                 Book Swap
             </a>
         </li>

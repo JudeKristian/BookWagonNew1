@@ -38,39 +38,59 @@ if (!isset($_POST['comment_id']) || empty($_POST['comment_id'])) {
 $commentId = (int)$_POST['comment_id'];
 
 // Check if comment exists
-$commentCheck = $conn->query("SELECT comment_id FROM forum_comments WHERE comment_id = $commentId");
-if ($commentCheck->num_rows === 0) {
+$commentStmt = $conn->prepare("SELECT comment_id FROM forum_comments WHERE comment_id = ?");
+$commentStmt->bind_param("i", $commentId);
+$commentStmt->execute();
+$commentRes = $commentStmt->get_result();
+
+if ($commentRes->num_rows === 0) {
+    $commentStmt->close();
     sendResponse(false, 'Invalid comment');
 }
+$commentStmt->close();
 
 // Check if user already liked this comment
-$likeCheck = $conn->query("SELECT interaction_id FROM forum_user_interactions 
-                         WHERE user_id = $userId AND comment_id = $commentId AND interaction_type = 'like'");
+$likeStmt = $conn->prepare("SELECT interaction_id FROM forum_user_interactions WHERE user_id = ? AND comment_id = ? AND interaction_type = 'like'");
+$likeStmt->bind_param("ii", $userId, $commentId);
+$likeStmt->execute();
+$likeRes = $likeStmt->get_result();
+$isLiked = ($likeRes->num_rows > 0);
+$likeStmt->close();
 
-if ($likeCheck->num_rows > 0) {
+if ($isLiked) {
     // User already liked this comment, so unlike it
-    $conn->query("DELETE FROM forum_user_interactions 
-                WHERE user_id = $userId AND comment_id = $commentId AND interaction_type = 'like'");
+    $delStmt = $conn->prepare("DELETE FROM forum_user_interactions WHERE user_id = ? AND comment_id = ? AND interaction_type = 'like'");
+    $delStmt->bind_param("ii", $userId, $commentId);
+    $delStmt->execute();
+    $delStmt->close();
     
     // Get new like count
-    $likesResult = $conn->query("SELECT COUNT(*) as likes FROM forum_user_interactions 
-                               WHERE comment_id = $commentId AND interaction_type = 'like'");
-    $likes = $likesResult->fetch_assoc()['likes'];
+    $cntStmt = $conn->prepare("SELECT COUNT(*) as likes FROM forum_user_interactions WHERE comment_id = ? AND interaction_type = 'like'");
+    $cntStmt->bind_param("i", $commentId);
+    $cntStmt->execute();
+    $likes = $cntStmt->get_result()->fetch_assoc()['likes'];
+    $cntStmt->close();
     
     sendResponse(true, 'Comment unliked successfully', ['likes' => $likes]);
 } else {
     // Add new like
-    $insertQuery = "INSERT INTO forum_user_interactions (user_id, comment_id, interaction_type) 
-                   VALUES ($userId, $commentId, 'like')";
+    $insStmt = $conn->prepare("INSERT INTO forum_user_interactions (user_id, comment_id, interaction_type) VALUES (?, ?, 'like')");
+    $insStmt->bind_param("ii", $userId, $commentId);
     
-    if ($conn->query($insertQuery)) {
+    if ($insStmt->execute()) {
+        $insStmt->close();
+        
         // Get new like count
-        $likesResult = $conn->query("SELECT COUNT(*) as likes FROM forum_user_interactions 
-                                   WHERE comment_id = $commentId AND interaction_type = 'like'");
-        $likes = $likesResult->fetch_assoc()['likes'];
+        $cntStmt = $conn->prepare("SELECT COUNT(*) as likes FROM forum_user_interactions WHERE comment_id = ? AND interaction_type = 'like'");
+        $cntStmt->bind_param("i", $commentId);
+        $cntStmt->execute();
+        $likes = $cntStmt->get_result()->fetch_assoc()['likes'];
+        $cntStmt->close();
         
         sendResponse(true, 'Comment liked successfully', ['likes' => $likes]);
     } else {
-        sendResponse(false, 'Failed to like comment: ' . $conn->error);
+        error_log("Failed to like comment: " . $insStmt->error);
+        $insStmt->close();
+        sendResponse(false, 'Failed to like comment. Please try again later.');
     }
 }

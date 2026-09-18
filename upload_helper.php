@@ -103,4 +103,15 @@ function upload_book_cover($file, $upload_dir = 'uploads/covers/') {
         return false;
     }
 }
+
+/**
+ * Generic secure image upload helper
+ * 
+ * @param array $file The $_FILES array element
+ * @param string $upload_dir Target directory with trailing slash
+ * @return string|bool Target path on success or false on failure
+ */
+function uploadImage($file, $upload_dir = 'uploads/') {
+    return upload_book_cover($file, $upload_dir);
+}
 ?>

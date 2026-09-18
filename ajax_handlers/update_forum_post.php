@@ -39,39 +39,48 @@ foreach ($requiredFields as $field) {
 
 // Sanitize and validate input
 $postId = (int)$_POST['post_id'];
-$title = $conn->real_escape_string(trim($_POST['title']));
-$content = $conn->real_escape_string(trim($_POST['content']));
+$title = trim($_POST['title']);
+$content = trim($_POST['content']);
 $categoryId = (int)$_POST['category_id'];
-$tags = isset($_POST['tags']) ? $conn->real_escape_string(trim($_POST['tags'])) : '';
+$tags = isset($_POST['tags']) ? trim($_POST['tags']) : '';
 
 // Check if post exists and user is the author
-$postCheck = $conn->query("SELECT user_id FROM forum_posts WHERE post_id = $postId");
-if ($postCheck->num_rows === 0) {
+$postStmt = $conn->prepare("SELECT user_id FROM forum_posts WHERE post_id = ?");
+$postStmt->bind_param("i", $postId);
+$postStmt->execute();
+$postRes = $postStmt->get_result();
+
+if ($postRes->num_rows === 0) {
+    $postStmt->close();
     sendResponse(false, 'Invalid post');
 }
 
-$postUserId = $postCheck->fetch_assoc()['user_id'];
-if ($postUserId != $userId) {
+$postRow = $postRes->fetch_assoc();
+$postStmt->close();
+
+if ($postRow['user_id'] != $userId) {
     sendResponse(false, 'You do not have permission to edit this post');
 }
 
 // Check if category exists
-$categoryCheck = $conn->query("SELECT category_id FROM forum_categories WHERE category_id = $categoryId");
-if ($categoryCheck->num_rows === 0) {
+$catStmt = $conn->prepare("SELECT category_id FROM forum_categories WHERE category_id = ?");
+$catStmt->bind_param("i", $categoryId);
+$catStmt->execute();
+if ($catStmt->get_result()->num_rows === 0) {
+    $catStmt->close();
     sendResponse(false, 'Invalid category selected');
 }
+$catStmt->close();
 
-// Update the post
-$updateQuery = "UPDATE forum_posts 
-               SET category_id = $categoryId, 
-                   title = '$title', 
-                   content = '$content', 
-                   tags = '$tags',
-                   updated_at = NOW()
-               WHERE post_id = $postId";
+// Update the post with prepared statement
+$updateStmt = $conn->prepare("UPDATE forum_posts SET category_id = ?, title = ?, content = ?, tags = ?, updated_at = NOW() WHERE post_id = ?");
+$updateStmt->bind_param("isssi", $categoryId, $title, $content, $tags, $postId);
 
-if ($conn->query($updateQuery)) {
+if ($updateStmt->execute()) {
+    $updateStmt->close();
     sendResponse(true, 'Post updated successfully');
 } else {
-    sendResponse(false, 'Failed to update post: ' . $conn->error);
+    error_log("Failed to update post: " . $updateStmt->error);
+    $updateStmt->close();
+    sendResponse(false, 'Failed to update post. Please try again later.');
 }

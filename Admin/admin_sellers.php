@@ -35,43 +35,59 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $businessPhone = $_POST['business_phone'] ?? '';
     
     // File upload handling for shop logo
-    $targetDir = "uploads/shop_logos/";
+    $targetDir = "../uploads/shop_logos/";
     $shopLogo = "";
     
     // Create directory if it doesn't exist
     if (!file_exists($targetDir)) {
-        mkdir($targetDir, 0777, true);
+        mkdir($targetDir, 0755, true);
     }
     
     if(isset($_FILES["shop_logo"]) && $_FILES["shop_logo"]["error"] == 0) {
-        $fileName = basename($_FILES["shop_logo"]["name"]);
-        $targetFilePath = $targetDir . $userId . "_" . $fileName;
-        $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
-        
-        // Allow certain file formats
-        $allowTypes = array('jpg', 'png', 'jpeg', 'gif');
-        if(in_array($fileType, $allowTypes)) {
-            // Upload file to server
-            if(move_uploaded_file($_FILES["shop_logo"]["tmp_name"], $targetFilePath)) {
-                $shopLogo = $targetFilePath;
+        $maxFileSize = 5 * 1024 * 1024; // 5MB limit
+        if ($_FILES["shop_logo"]["size"] > $maxFileSize) {
+            $error = "Logo file exceeds the maximum allowed size of 5MB.";
+        } else {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mime = finfo_file($finfo, $_FILES["shop_logo"]["tmp_name"]);
+            finfo_close($finfo);
+
+            $allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+            $fileExt = strtolower(pathinfo($_FILES["shop_logo"]["name"], PATHINFO_EXTENSION));
+            $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+            if (in_array($mime, $allowedMimes) && in_array($fileExt, $allowedExts)) {
+                $safeName = "logo_" . intval($userId) . "_" . bin2hex(random_bytes(6)) . "." . $fileExt;
+                $targetFilePath = $targetDir . $safeName;
+                if (move_uploaded_file($_FILES["shop_logo"]["tmp_name"], $targetFilePath)) {
+                    chmod($targetFilePath, 0644);
+                    // Store relative to project root
+                    $shopLogo = "uploads/shop_logos/" . $safeName;
+                } else {
+                    $error = "Failed to upload shop logo.";
+                }
+            } else {
+                $error = "Invalid file type. Only JPG, PNG, GIF, and WebP images are allowed.";
             }
         }
     }
     
-    // Create seller record in database
-    $sql = "INSERT INTO sellers (user_id, shop_name, seller_type, business_name, first_name, last_name, middle_name, location, address, zip_code, business_email, business_phone, shop_logo, status, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())";
-    
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("isssssssssss", $userId, $shopName, $sellerType, $businessName, $firstName, $lastName, $middleName, $location, $address, $zipCode, $businessEmail, $businessPhone, $shopLogo);
-    
-    if ($stmt->execute()) {
-        // Don't update user type yet - will be done by admin after approval
-        // Just redirect to success page
-        header("Location: seller_success.php");
-        exit();
-    } else {
-        $error = "Error: " . $stmt->error;
+    if (empty($error)) {
+        // Create seller record in database
+        $sql = "INSERT INTO sellers (user_id, shop_name, seller_type, business_name, first_name, last_name, middle_name, location, address, zip_code, business_email, business_phone, shop_logo, status, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("issssssssssss", $userId, $shopName, $sellerType, $businessName, $firstName, $lastName, $middleName, $location, $address, $zipCode, $businessEmail, $businessPhone, $shopLogo);
+        
+        if ($stmt->execute()) {
+            // Redirect to success page
+            header("Location: ../seller_success.php");
+            exit();
+        } else {
+            error_log("admin_sellers.php SQL error: " . $stmt->error);
+            $error = "An error occurred while submitting the seller application. Please try again.";
+        }
     }
 }
 ?>
@@ -255,9 +271,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 <body>
     <?php 
     if ($userType == 'user') {
-        include("include/user_header.php");
+        include("../include/user_header.php");
     } elseif ($userType == 'seller') {
-        include("include/seller_header.php");
+        include("../include/seller_header.php");
     }
     ?>
 

@@ -658,8 +658,14 @@ foreach ($rentals as $rental) {
                                                 Contact Renter
                                             </button>
                                         <?php endif; ?>
-                                        <button type="button" class="btn-clean-primary" data-bs-toggle="modal" data-bs-target="#returnBookModal<?php echo $rental['rental_id']; ?>">
-                                            Mark Returned
+                                        <?php if ($status === 'return_pending'): ?>
+                                            <button type="button" class="btn-clean-primary" style="background-color: #f8a100;" data-bs-toggle="modal" data-bs-target="#scanReturnModal" onclick="initReturnScan(<?php echo $rental['rental_id']; ?>)">
+                                                <i class="fas fa-qrcode"></i> Scan Return QR
+                                            </button>
+                                        <?php endif; ?>
+                                        
+                                        <button type="button" class="btn-clean-outline text-muted" style="font-size: 0.75rem; padding: 4px 8px;" data-bs-toggle="modal" data-bs-target="#returnBookModal<?php echo $rental['rental_id']; ?>">
+                                            Manual Return
                                         </button>
                                     <?php elseif ($status === 'returned'): ?>
                                         <div class="text-end">
@@ -877,6 +883,70 @@ foreach ($rentals as $rental) {
                 }
             }
         });
+    </script>
+    <!-- Scan Return Modal -->
+    <div class="modal fade" id="scanReturnModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 10px; border: 1px solid var(--bw-border);">
+                <div class="modal-header py-3 px-4" style="border-bottom: 1px solid #f1f5f9;">
+                    <h5 class="modal-title" style="font-size: 1rem; font-weight: 700;">Scan Renter's Return QR</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" onclick="stopReturnScanner()" style="font-size: 0.75rem;"></button>
+                </div>
+                <div class="modal-body p-4 text-center">
+                    <p class="text-muted small mb-3">Scan the Return QR code presented by the Renter to finalize the return process.</p>
+                    <div id="return-qr-reader" style="width: 100%; max-width: 400px; margin: 0 auto;"></div>
+                    <div id="return-qr-result" class="mt-3" style="display: none;">
+                        <div class="alert alert-success fw-semibold"><i class="fas fa-check-circle me-1"></i> QR Scanned! Verifying...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Scripts -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script>
+        let html5ReturnScanner = null;
+        let activeReturnRentalId = null;
+
+        function initReturnScan(rentalId) {
+            activeReturnRentalId = rentalId;
+            document.getElementById('return-qr-result').style.display = 'none';
+            document.getElementById('return-qr-reader').style.display = 'block';
+            
+            if (!html5ReturnScanner) {
+                html5ReturnScanner = new Html5QrcodeScanner(
+                    "return-qr-reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+                html5ReturnScanner.render(onReturnScanSuccess, onReturnScanError);
+            }
+        }
+
+        function stopReturnScanner() {
+            if (html5ReturnScanner) {
+                html5ReturnScanner.clear();
+                html5ReturnScanner = null;
+            }
+        }
+
+        function onReturnScanSuccess(decodedText, decodedResult) {
+            try {
+                const data = JSON.parse(decodedText);
+                if (data.cert === "BOOKWAGON_RENTAL_RETURN_RECEIPT" && data.rental_id == activeReturnRentalId) {
+                    stopReturnScanner();
+                    document.getElementById('return-qr-reader').style.display = 'none';
+                    document.getElementById('return-qr-result').style.display = 'block';
+                    
+                    // Redirect to process the return scanning
+                    window.location.href = `process_return_seller.php?action=scan_return&rental_id=${data.rental_id}&token=${data.token}`;
+                } else {
+                    alert("Invalid QR code. Please ensure it is the correct Return QR code for this rental.");
+                }
+            } catch (e) {
+                alert("Invalid QR code format.");
+            }
+        }
+
+        function onReturnScanError(errorMessage) {}
     </script>
 </body>
 </html>

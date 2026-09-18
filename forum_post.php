@@ -26,11 +26,13 @@ if ($postId <= 0) {
     exit;
 }
 
-// Increment view count
-$updateViewsQuery = "UPDATE forum_posts SET views = views + 1 WHERE post_id = $postId";
-$conn->query($updateViewsQuery);
+// Increment view count with prepared statement
+$stmtViews = $conn->prepare("UPDATE forum_posts SET views = views + 1 WHERE post_id = ?");
+$stmtViews->bind_param("i", $postId);
+$stmtViews->execute();
+$stmtViews->close();
 
-// Get post details
+// Get post details with prepared statement
 $postQuery = "SELECT fp.*, 
               fc.name as category_name, 
               fc.color as category_color,
@@ -43,10 +45,13 @@ $postQuery = "SELECT fp.*,
               LEFT JOIN forum_categories fc ON fp.category_id = fc.category_id
               LEFT JOIN users u ON fp.user_id = u.id
               LEFT JOIN forum_comments fc2 ON fp.post_id = fc2.post_id
-              WHERE fp.post_id = $postId
+              WHERE fp.post_id = ?
               GROUP BY fp.post_id";
 
-$postResult = $conn->query($postQuery);
+$stmtPost = $conn->prepare($postQuery);
+$stmtPost->bind_param("i", $postId);
+$stmtPost->execute();
+$postResult = $stmtPost->get_result();
 
 // If post not found, redirect
 if (!$postResult || $postResult->num_rows === 0) {
@@ -55,8 +60,9 @@ if (!$postResult || $postResult->num_rows === 0) {
 }
 
 $post = $postResult->fetch_assoc();
+$stmtPost->close();
 
-// Get comments
+// Get comments with prepared statement
 $commentsQuery = "SELECT fc.*, 
                  u.firstname, 
                  u.lastname, 
@@ -66,10 +72,13 @@ $commentsQuery = "SELECT fc.*,
                   WHERE comment_id = fc.comment_id AND interaction_type = 'like') as likes
                  FROM forum_comments fc
                  LEFT JOIN users u ON fc.user_id = u.id
-                 WHERE fc.post_id = $postId AND fc.parent_id IS NULL
+                 WHERE fc.post_id = ? AND fc.parent_id IS NULL
                  ORDER BY fc.created_at ASC";
 
-$commentsResult = $conn->query($commentsQuery);
+$stmtComments = $conn->prepare($commentsQuery);
+$stmtComments->bind_param("i", $postId);
+$stmtComments->execute();
+$commentsResult = $stmtComments->get_result();
 
 // Function to get time elapsed string
 function time_elapsed_string($datetime, $full = false) {

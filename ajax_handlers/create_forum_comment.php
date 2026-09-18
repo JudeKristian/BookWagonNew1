@@ -39,36 +39,49 @@ foreach ($requiredFields as $field) {
 
 // Sanitize and validate input
 $postId = (int)$_POST['post_id'];
-$content = $conn->real_escape_string(trim($_POST['content']));
-$parentId = isset($_POST['parent_id']) ? (int)$_POST['parent_id'] : null;
+$content = trim($_POST['content']);
+$parentId = (isset($_POST['parent_id']) && is_numeric($_POST['parent_id']) && (int)$_POST['parent_id'] > 0) ? (int)$_POST['parent_id'] : null;
 
 // Check if post exists and is active
-$postCheck = $conn->query("SELECT status FROM forum_posts WHERE post_id = $postId");
-if ($postCheck->num_rows === 0) {
+$postStmt = $conn->prepare("SELECT status FROM forum_posts WHERE post_id = ?");
+$postStmt->bind_param("i", $postId);
+$postStmt->execute();
+$postRes = $postStmt->get_result();
+
+if ($postRes->num_rows === 0) {
+    $postStmt->close();
     sendResponse(false, 'Invalid post');
 }
 
-$postStatus = $postCheck->fetch_assoc()['status'];
-if ($postStatus === 'closed') {
+$postData = $postRes->fetch_assoc();
+$postStmt->close();
+
+if ($postData['status'] === 'closed') {
     sendResponse(false, 'This discussion is closed and cannot receive new comments');
 }
 
 // Check if parent comment exists if replying
 if ($parentId) {
-    $parentCheck = $conn->query("SELECT comment_id FROM forum_comments WHERE comment_id = $parentId");
-    if ($parentCheck->num_rows === 0) {
+    $parentStmt = $conn->prepare("SELECT comment_id FROM forum_comments WHERE comment_id = ?");
+    $parentStmt->bind_param("i", $parentId);
+    $parentStmt->execute();
+    if ($parentStmt->get_result()->num_rows === 0) {
+        $parentStmt->close();
         sendResponse(false, 'Invalid parent comment');
     }
+    $parentStmt->close();
 }
 
-// Insert the comment
-$parentIdSql = $parentId ? $parentId : 'NULL';
-$insertQuery = "INSERT INTO forum_comments (post_id, user_id, content, parent_id) 
-                VALUES ($postId, $userId, '$content', " . ($parentId ? $parentId : "NULL") . ")";
+// Insert the comment with prepared statement
+$insertStmt = $conn->prepare("INSERT INTO forum_comments (post_id, user_id, content, parent_id) VALUES (?, ?, ?, ?)");
+$insertStmt->bind_param("iisi", $postId, $userId, $content, $parentId);
 
-if ($conn->query($insertQuery)) {
+if ($insertStmt->execute()) {
     $commentId = $conn->insert_id;
+    $insertStmt->close();
     sendResponse(true, 'Comment posted successfully', ['comment_id' => $commentId]);
 } else {
-    sendResponse(false, 'Failed to post comment: ' . $conn->error);
+    error_log("Failed to post comment: " . $insertStmt->error);
+    $insertStmt->close();
+    sendResponse(false, 'Failed to post comment. Please try again later.');
 } 

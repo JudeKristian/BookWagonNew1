@@ -199,7 +199,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 $tabCountsQuery = "
     SELECT 
         COUNT(DISTINCT o.order_id) as total_count,
-        COUNT(DISTINCT CASE WHEN oi.status IN ('pending', 'processing') THEN o.order_id END) as pending_count,
+        COUNT(DISTINCT CASE WHEN oi.status IN ('pending', 'processing', 'pending_meetup') THEN o.order_id END) as pending_count,
         COUNT(DISTINCT CASE WHEN oi.status = 'shipped' THEN o.order_id END) as shipped_count,
         COUNT(DISTINCT CASE WHEN oi.status = 'delivered' THEN o.order_id END) as delivered_count,
         COUNT(DISTINCT CASE WHEN oi.purchase_type = 'rent' THEN o.order_id END) as rental_count,
@@ -227,7 +227,7 @@ $params = [$userId];
 $paramTypes = "i";
 
 if ($status_filter === 'pending') {
-    $whereClause .= " AND oi.status IN ('pending', 'processing')";
+    $whereClause .= " AND oi.status IN ('pending', 'processing', 'pending_meetup')";
 } elseif ($status_filter === 'shipped') {
     $whereClause .= " AND oi.status = 'shipped'";
 } elseif ($status_filter === 'delivered') {
@@ -274,10 +274,12 @@ $query = "
         o.notes, 
         o.shipping_fee, 
         o.pickup_location,
+        o.user_id,
         u.firstname as u_first, 
         u.lastname as u_last, 
         u.email as u_email, 
         u.phone as u_phone,
+        u.id_verified_status,
         oi.item_id, 
         oi.book_id, 
         oi.quantity, 
@@ -329,9 +331,11 @@ foreach ($orderItems as $item) {
             'notes' => $item['notes'] ?? '',
             'pickup_location' => $item['pickup_location'] ?? '',
             'customer' => [
+                'id' => $item['user_id'] ?? 0,
                 'name' => $customerName,
                 'email' => !empty($item['email']) ? $item['email'] : ($item['u_email'] ?? ''),
-                'phone' => !empty($item['phone']) ? $item['phone'] : ($item['u_phone'] ?? '')
+                'phone' => !empty($item['phone']) ? $item['phone'] : ($item['u_phone'] ?? ''),
+                'is_verified' => ($item['id_verified_status'] === 'verified')
             ],
             'items' => [],
             'seller_subtotal' => 0
@@ -764,7 +768,7 @@ foreach ($orderItems as $item) {
                         All Orders <span class="tab-count"><?php echo $tabCounts['total_count']; ?></span>
                     </a>
                     <a href="order.php?status=pending" class="nav-tab-link <?php echo ($status_filter === 'pending') ? 'active' : ''; ?>">
-                        To Ship <span class="tab-count"><?php echo $tabCounts['pending_count']; ?></span>
+                        Pending Meet-up/Ship <span class="tab-count"><?php echo $tabCounts['pending_count']; ?></span>
                     </a>
                     <a href="order.php?status=shipped" class="nav-tab-link <?php echo ($status_filter === 'shipped') ? 'active' : ''; ?>">
                         In Transit <span class="tab-count"><?php echo $tabCounts['shipped_count']; ?></span>
@@ -860,12 +864,22 @@ foreach ($orderItems as $item) {
                                 <form action="order.php" method="POST" class="d-flex align-items-center">
                                     <input type="hidden" name="action" value="update_status">
                                     <input type="hidden" name="order_id" value="<?php echo $order['order_id']; ?>">
+                                    <?php
+                                        $seller_statuses = array_unique(array_column($order['items'], 'item_status'));
+                                        $seller_order_status = (count($seller_statuses) === 1) ? $seller_statuses[0] : 'mixed';
+                                    ?>
                                     <select name="new_status" class="form-select form-select-sm" style="width: 120px; font-size: 0.78rem;" onchange="this.form.submit()">
-                                        <option value="pending" <?php echo $order['main_order_status'] === 'pending' ? 'selected' : ''; ?>>Pending</option>
-                                        <option value="processing" <?php echo $order['main_order_status'] === 'processing' ? 'selected' : ''; ?>>Processing</option>
-                                        <option value="shipped" <?php echo $order['main_order_status'] === 'shipped' ? 'selected' : ''; ?>>Shipped</option>
-                                        <option value="delivered" <?php echo $order['main_order_status'] === 'delivered' ? 'selected' : ''; ?>>Delivered</option>
-                                        <option value="cancelled" <?php echo $order['main_order_status'] === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+                                        <option value="pending" <?php echo $seller_order_status === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                        <option value="pending_meetup" <?php echo $seller_order_status === 'pending_meetup' ? 'selected' : ''; ?>>Pending Meet-up</option>
+                                        <option value="processing" <?php echo $seller_order_status === 'processing' ? 'selected' : ''; ?>>Processing</option>
+                                        <option value="shipped" <?php echo $seller_order_status === 'shipped' ? 'selected' : ''; ?>>Shipped</option>
+                                        <option value="delivered" <?php echo $seller_order_status === 'delivered' ? 'selected' : ''; ?>>Delivered</option>
+                                        <option value="cancelled" <?php echo $seller_order_status === 'cancelled' ? 'selected' : ''; ?>>Cancelled</option>
+                                        <?php if ($seller_order_status === 'mixed' || !in_array($seller_order_status, ['pending', 'pending_meetup', 'processing', 'shipped', 'delivered', 'cancelled'])): ?>
+                                            <option value="<?php echo htmlspecialchars($seller_order_status); ?>" selected disabled>
+                                                <?php echo $seller_order_status === 'mixed' ? 'Mixed Statuses' : ucfirst(str_replace('_', ' ', $seller_order_status)); ?>
+                                            </option>
+                                        <?php endif; ?>
                                     </select>
                                 </form>
                             </div>
@@ -873,7 +887,12 @@ foreach ($orderItems as $item) {
 
                         <!-- Buyer Info Strip -->
                         <div class="buyer-strip">
-                            <div>Buyer: <strong><?php echo htmlspecialchars($order['customer']['name']); ?></strong></div>
+                            <div>
+                                Buyer: <strong><?php echo htmlspecialchars($order['customer']['name']); ?></strong>
+                                <?php if ($order['customer']['is_verified']): ?>
+                                    <span class="badge bg-success ms-1" title="Identity Verified by Admin"><i class="fas fa-check-circle"></i> Verified</span>
+                                <?php endif; ?>
+                            </div>
                             <?php if (!empty($order['customer']['phone'])): ?>
                                 <div>Phone: <strong><?php echo htmlspecialchars($order['customer']['phone']); ?></strong></div>
                             <?php endif; ?>
@@ -923,7 +942,14 @@ foreach ($orderItems as $item) {
 
                                     <!-- Action -->
                                     <div>
-                                        <?php if ($item['status'] === 'pending' || $item['status'] === 'processing'): ?>
+                                        <?php if ($item['status'] === 'pending_meetup'): ?>
+                                            <button type="button" class="btn-clean-primary mb-1 text-center d-block text-decoration-none" style="background-color: var(--bw-primary); width: 100%; border: none;" data-bs-toggle="modal" data-bs-target="#sellerHandshakeModal" data-order-id="<?php echo $order['order_id']; ?>" data-item-id="<?php echo $item['item_id']; ?>" data-buyer-id="<?php echo $order['customer']['id']; ?>" onclick="initSellerHandshake(this)">
+                                                <i class="fas fa-handshake"></i> Handshake
+                                            </button>
+                                            <button type="button" class="btn-clean-outline text-center" style="display: block; width: 100%;" onclick="showBuyerDetails(<?php echo $order['customer']['id']; ?>)">
+                                                <i class="fas fa-id-card"></i> Buyer ID
+                                            </button>
+                                        <?php elseif ($item['status'] === 'pending' || $item['status'] === 'processing'): ?>
                                             <form action="order.php" method="POST" style="display: inline;">
                                                 <input type="hidden" name="action" value="mark_as_shipped">
                                                 <input type="hidden" name="item_id" value="<?php echo $item['item_id']; ?>">
@@ -966,7 +992,203 @@ foreach ($orderItems as $item) {
         </div>
     </div>
 
+    <!-- Buyer Details Modal -->
+    <div class="modal fade" id="buyerDetailsModal" tabindex="-1" aria-labelledby="buyerDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold" id="buyerDetailsModalLabel">Buyer Verification Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center" id="buyerDetailsContent">
+                    <!-- Content loaded via AJAX -->
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Meet-up Handshake Modal -->
+    <div class="modal fade" id="sellerHandshakeModal" tabindex="-1" aria-labelledby="sellerHandshakeModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold" id="sellerHandshakeModalLabel">Meet-up Handover</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center">
+                    <!-- Step 1: Show QR -->
+                    <div class="mb-4">
+                        <h6 class="fw-bold mb-3">Step 1: Show this QR to the Buyer</h6>
+                        <div id="sellerQrCode" class="d-inline-block p-3 border rounded mb-2 bg-white"></div>
+                        <p class="text-muted small">The buyer must scan this to confirm the book's condition.</p>
+                    </div>
+
+                    <hr>
+
+                    <!-- Step 2: Finalize -->
+                    <div class="mt-4 text-start">
+                        <h6 class="fw-bold mb-2">Step 2: Finalize Delivery</h6>
+                        <p class="small text-muted mb-3">Once the buyer submits their condition check, upload a delivery photo (optional) and click complete.</p>
+                        <form action="process_qr_handoff.php" method="POST" enctype="multipart/form-data">
+                            <input type="hidden" name="order_id" id="shs_order_id">
+                            <input type="hidden" name="item_id" id="shs_item_id">
+                            <input type="hidden" name="buyer_id" id="shs_buyer_id">
+                            
+                            <label class="form-label small fw-semibold">Proof of Delivery Photo (Optional):</label>
+                            <input type="file" name="condition_photo" class="form-control form-control-sm mb-3" accept="image/*">
+                            
+                            <button type="submit" name="finalize_action" value="delivered" class="btn w-100 fw-bold mb-2" style="background-color: var(--success-color); color: white; padding: 12px;">
+                                <i class="fas fa-check-circle me-1"></i> Delivered (Complete Handover)
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Manual Override -->
+                    <div class="mt-4 pt-3 border-top text-start">
+                        <p class="text-muted small mb-2"><i class="fas fa-info-circle"></i> Trouble scanning? Use manual override (bypasses Renter's condition check):</p>
+                        <form action="process_qr_handoff.php" method="POST">
+                            <input type="hidden" name="order_id" id="manual_shs_order_id">
+                            <input type="hidden" name="item_id" id="manual_shs_item_id">
+                            <input type="hidden" name="buyer_id" id="manual_shs_buyer_id">
+                            <button type="submit" name="finalize_action" value="manual" class="btn btn-outline-secondary btn-sm w-100 fw-bold">Manually Confirm Book Given</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bootstrap Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    
+    <script>
+        // Buyer Details logic
+        function showBuyerDetails(buyerId) {
+            const contentDiv = document.getElementById('buyerDetailsContent');
+            contentDiv.innerHTML = '<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>';
+            
+            fetch(`ajax_handlers/get_buyer_details.php?buyer_id=${buyerId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        let html = `
+                            <h4 class="mb-1">${data.name}</h4>
+                            <p class="text-muted small mb-3">${data.email} | ${data.phone}</p>
+                            <hr>
+                            <h6 class="fw-bold mb-2">ID Verification Status</h6>
+                        `;
+                        
+                        if (data.id_verified_status === 'verified') {
+                            html += `<span class="badge bg-success mb-3">Verified</span>`;
+                        } else if (data.id_verified_status === 'pending') {
+                            html += `<span class="badge bg-warning text-dark mb-3">Verification Pending</span>`;
+                        } else {
+                            html += `<span class="badge bg-danger mb-3">Not Verified</span>`;
+                        }
+                        
+                        if (data.id_image_path) {
+                            html += `<div class="mt-2"><img src="${data.id_image_path}" class="img-fluid rounded" style="max-height: 250px; object-fit: contain;" alt="ID Document"></div>`;
+                        } else {
+                            html += `<div class="alert alert-secondary mt-2">No ID image uploaded.</div>`;
+                        }
+                        
+                        contentDiv.innerHTML = html;
+                    } else {
+                        contentDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                    }
+                })
+                .catch(err => {
+                    contentDiv.innerHTML = `<div class="alert alert-danger">Error fetching details.</div>`;
+                });
+        }
+
+        // QR Handshake Logic
+        let sellerHtml5QrcodeScanner = null;
+        let activeSellerOrderId = null;
+        let activeSellerItemId = null;
+        let activeSellerBuyerId = null;
+
+        function initSellerHandshake(btn) {
+            activeSellerOrderId = btn.getAttribute('data-order-id');
+            activeSellerItemId = btn.getAttribute('data-item-id');
+            activeSellerBuyerId = btn.getAttribute('data-buyer-id');
+            
+            document.getElementById('shs_order_id').value = activeSellerOrderId;
+            document.getElementById('shs_item_id').value = activeSellerItemId;
+            document.getElementById('shs_buyer_id').value = activeSellerBuyerId;
+            
+            document.getElementById('manual_shs_order_id').value = activeSellerOrderId;
+            document.getElementById('manual_shs_item_id').value = activeSellerItemId;
+            document.getElementById('manual_shs_buyer_id').value = activeSellerBuyerId;
+            
+            // Generate QR Code
+            const qrContainer = document.getElementById('sellerQrCode');
+            qrContainer.innerHTML = ''; 
+            
+            const qrData = JSON.stringify({
+                action: 'handover',
+                order_id: activeSellerOrderId,
+                item_id: activeSellerItemId,
+                role: 'seller'
+            });
+            
+            new QRCode(qrContainer, {
+                text: qrData,
+                width: 220,
+                height: 220
+            });
+            
+            // Reset scan tab
+            document.getElementById('seller-qr-result').style.display = 'none';
+            document.getElementById('seller-qr-reader').style.display = 'block';
+            
+            // Auto switch to Scan Tab
+            const scanTab = new bootstrap.Tab(document.getElementById('seller-scan-qr-tab'));
+            scanTab.show();
+            startSellerScanner();
+        }
+
+        function startSellerScanner() {
+            if (!sellerHtml5QrcodeScanner) {
+                sellerHtml5QrcodeScanner = new Html5QrcodeScanner(
+                    "seller-qr-reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+                sellerHtml5QrcodeScanner.render(onSellerScanSuccess, onSellerScanError);
+            }
+        }
+
+        function stopSellerScanner() {
+            if (sellerHtml5QrcodeScanner) {
+                sellerHtml5QrcodeScanner.clear();
+                sellerHtml5QrcodeScanner = null;
+            }
+        }
+
+        function onSellerScanSuccess(decodedText, decodedResult) {
+            try {
+                const data = JSON.parse(decodedText);
+                if (data.cert === "BOOKWAGON_RENTER_HANDOVER" && data.order_id == activeSellerOrderId && data.item_id == activeSellerItemId) {
+                    stopSellerScanner();
+                    document.getElementById('shs_token').value = data.token;
+                    document.getElementById('seller-qr-reader').style.display = 'none';
+                    document.getElementById('seller-qr-result').style.display = 'block';
+                } else {
+                    alert("Invalid QR code. Please scan the renter's final QR code for this specific item.");
+                }
+            } catch (e) {
+                alert("Invalid QR code format.");
+            }
+        }
+
+        function onSellerScanError(errorMessage) {}
+
+        document.getElementById('sellerHandshakeModal').addEventListener('hidden.bs.modal', function () {
+            stopSellerScanner();
+        });
+    </script>
 </body>
 </html>

@@ -40,7 +40,7 @@ $category = isset($_GET['category']) ? (int)$_GET['category'] : 0;
 $sortBy = isset($_GET['sort']) ? $conn->real_escape_string($_GET['sort']) : 'newest';
 $tag = isset($_GET['tag']) ? $conn->real_escape_string($_GET['tag']) : '';
 
-// Fetch categories
+// Fetch categories and precompute post counts
 $categoryQuery = "SELECT * FROM forum_categories ORDER BY order_index ASC";
 $categoryResult = $conn->query($categoryQuery);
 $categories = [];
@@ -48,16 +48,36 @@ while ($cat = $categoryResult->fetch_assoc()) {
     $categories[] = $cat;
 }
 
-// Build dynamic query for posts
+$catCounts = [];
+$catCountRes = $conn->query("SELECT category_id, COUNT(*) as count FROM forum_posts GROUP BY category_id");
+if ($catCountRes) {
+    while ($cr = $catCountRes->fetch_assoc()) {
+        $catCounts[$cr['category_id']] = (int)$cr['count'];
+    }
+}
+
+// Build dynamic query for posts with prepared statements
 $whereConditions = [];
+$queryParams = [];
+$queryTypes = "";
+
 if (!empty($searchQuery)) {
-    $whereConditions[] = "(fp.title LIKE '%$searchQuery%' OR fp.content LIKE '%$searchQuery%' OR fp.tags LIKE '%$searchQuery%')";
+    $whereConditions[] = "(fp.title LIKE ? OR fp.content LIKE ? OR fp.tags LIKE ?)";
+    $likeSearch = '%' . $searchQuery . '%';
+    $queryParams[] = $likeSearch;
+    $queryParams[] = $likeSearch;
+    $queryParams[] = $likeSearch;
+    $queryTypes .= "sss";
 }
 if (!empty($category) && $category > 0) {
-    $whereConditions[] = "fp.category_id = $category";
+    $whereConditions[] = "fp.category_id = ?";
+    $queryParams[] = $category;
+    $queryTypes .= "i";
 }
 if (!empty($tag)) {
-    $whereConditions[] = "fp.tags LIKE '%$tag%'";
+    $whereConditions[] = "fp.tags LIKE ?";
+    $queryParams[] = '%' . $tag . '%';
+    $queryTypes .= "s";
 }
 
 $whereClause = !empty($whereConditions) ? 'WHERE ' . implode(' AND ', $whereConditions) : '';
@@ -70,13 +90,19 @@ $orderByClause = match($sortBy) {
     default => 'ORDER BY fp.is_pinned DESC, fp.created_at DESC'
 };
 
-// Total results query
+// Total results query (parameterized)
 $totalQuery = "SELECT COUNT(*) as total FROM forum_posts fp $whereClause";
-$totalResult = $conn->query($totalQuery);
-$totalRows = $totalResult->fetch_assoc()['total'];
+$totalStmt = $conn->prepare($totalQuery);
+if (!empty($queryParams)) {
+    $totalStmt->bind_param($queryTypes, ...$queryParams);
+}
+$totalStmt->execute();
+$totalResult = $totalStmt->get_result();
+$totalRows = $totalResult->fetch_assoc()['total'] ?? 0;
+$totalStmt->close();
 $totalPages = ceil($totalRows / $resultsPerPage);
 
-// Main forum posts query with comment count and user info
+// Main forum posts query with comment count and user info (parameterized)
 $postsQuery = "SELECT fp.*, 
                fc.name as category_name, 
                fc.color as category_color,
@@ -86,14 +112,21 @@ $postsQuery = "SELECT fp.*,
                u.profile_picture,
                (SELECT COUNT(*) FROM forum_comments WHERE post_id = fp.post_id) as comment_count,
                (SELECT COUNT(*) FROM forum_user_interactions WHERE post_id = fp.post_id AND interaction_type = 'like') as likes,
-               (SELECT COUNT(*) > 0 FROM forum_user_interactions WHERE post_id = fp.post_id AND user_id = $userId AND interaction_type = 'like') as user_liked
+               (SELECT COUNT(*) > 0 FROM forum_user_interactions WHERE post_id = fp.post_id AND user_id = ? AND interaction_type = 'like') as user_liked
                FROM forum_posts fp
                LEFT JOIN forum_categories fc ON fp.category_id = fc.category_id
                LEFT JOIN users u ON fp.user_id = u.id
                $whereClause 
                $orderByClause 
-               LIMIT $resultsPerPage OFFSET $offset";
-$postsResult = $conn->query($postsQuery);
+               LIMIT ? OFFSET ?";
+
+$fullTypes = "i" . $queryTypes . "ii";
+$fullParams = array_merge([$userId], $queryParams, [$resultsPerPage, $offset]);
+
+$postsStmt = $conn->prepare($postsQuery);
+$postsStmt->bind_param($fullTypes, ...$fullParams);
+$postsStmt->execute();
+$postsResult = $postsStmt->get_result();
 
 // Fetch recent active posts for sidebar
 $recentQuery = "SELECT fp.post_id, fp.title, fp.created_at, u.id as user_id, u.firstname, u.lastname
@@ -1048,10 +1081,7 @@ function time_elapsed_string($datetime, $full = false) {
                     </div>
                     <ul class="category-list">
                         <?php foreach ($categories as $cat): 
-                            // Get post count for this category
-                            $countQuery = "SELECT COUNT(*) as count FROM forum_posts WHERE category_id = " . $cat['category_id'];
-                            $countResult = $conn->query($countQuery);
-                            $postCount = $countResult->fetch_assoc()['count'];
+                            $postCount = $catCounts[$cat['category_id']] ?? 0;
                         ?>
                             <li>
                                 <a href="?category=<?= $cat['category_id'] ?>" class="d-flex align-items-center">

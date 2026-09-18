@@ -38,24 +38,31 @@ foreach ($requiredFields as $field) {
 }
 
 // Sanitize and validate input
-$title = $conn->real_escape_string(trim($_POST['title']));
-$content = $conn->real_escape_string(trim($_POST['content']));
+$title = trim($_POST['title']);
+$content = trim($_POST['content']);
 $categoryId = (int)$_POST['category_id'];
-$tags = isset($_POST['tags']) ? $conn->real_escape_string(trim($_POST['tags'])) : '';
+$tags = isset($_POST['tags']) ? trim($_POST['tags']) : '';
 
 // Check if category exists
-$categoryCheck = $conn->query("SELECT category_id FROM forum_categories WHERE category_id = $categoryId");
-if ($categoryCheck->num_rows === 0) {
+$catStmt = $conn->prepare("SELECT category_id FROM forum_categories WHERE category_id = ?");
+$catStmt->bind_param("i", $categoryId);
+$catStmt->execute();
+if ($catStmt->get_result()->num_rows === 0) {
+    $catStmt->close();
     sendResponse(false, 'Invalid category selected');
 }
+$catStmt->close();
 
-// Insert the post
-$insertQuery = "INSERT INTO forum_posts (category_id, user_id, title, content, tags) 
-                VALUES ($categoryId, $userId, '$title', '$content', '$tags')";
+// Insert the post with prepared statement
+$insertStmt = $conn->prepare("INSERT INTO forum_posts (category_id, user_id, title, content, tags) VALUES (?, ?, ?, ?, ?)");
+$insertStmt->bind_param("iisss", $categoryId, $userId, $title, $content, $tags);
 
-if ($conn->query($insertQuery)) {
+if ($insertStmt->execute()) {
     $postId = $conn->insert_id;
+    $insertStmt->close();
     sendResponse(true, 'Post created successfully', ['post_id' => $postId]);
 } else {
-    sendResponse(false, 'Failed to create post: ' . $conn->error);
+    error_log("Failed to create post: " . $insertStmt->error);
+    $insertStmt->close();
+    sendResponse(false, 'Failed to create post. Please try again later.');
 } 

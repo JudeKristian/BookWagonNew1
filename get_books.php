@@ -77,11 +77,12 @@ if(isset($_GET['search']) && $_GET['search'] != '') {
 // Default query
 $query = "SELECT b.*, u.firstname, u.lastname, u.profile_picture 
           FROM books b
-          JOIN users u ON b.user_id = u.id";
+          JOIN users u ON b.user_id = u.id
+          WHERE b.approval_status = 'approved'";
 
 // Add WHERE if we have conditions
 if(!empty($where_clauses)) {
-    $query .= " WHERE " . implode(" AND ", $where_clauses);
+    $query .= " AND " . implode(" AND ", $where_clauses);
 }
 
 // Add ORDER BY

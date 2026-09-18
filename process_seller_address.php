@@ -74,7 +74,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 ':seller_type' => $sellerType,
                 ':business_name' => $shopName,
                 ':first_name' => $regData['first_name'],
-                ':middle_name' => $regData['middle_name'],
+                ':middle_name' => '',
                 ':last_name' => $regData['last_name'],
                 ':location' => $fullLocation,
                 ':address' => $detailedAddress,
@@ -114,7 +114,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 ':seller_type' => $sellerType,
                 ':business_name' => $shopName,
                 ':first_name' => $regData['first_name'],
-                ':middle_name' => $regData['middle_name'],
+                ':middle_name' => '',
                 ':last_name' => $regData['last_name'],
                 ':location' => $fullLocation,
                 ':address' => $detailedAddress,
@@ -132,13 +132,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             ]);
         }
 
-        // Also update users table phone and address for user profile convenience
-        $updateUser = $pdo->prepare("UPDATE users SET phone = :phone, address = :address, city = :city, postal_code = :postal_code WHERE id = :user_id");
+        // Also update users table phone, address, and E-Wallet details for user profile convenience
+        $updateUser = $pdo->prepare("UPDATE users SET phone = :phone, address = :address, city = :city, postal_code = :postal_code, payout_provider = :payout_provider, payout_name = :payout_name, payout_number = :payout_number, payout_qr_code = COALESCE(:payout_qr_code, payout_qr_code) WHERE id = :user_id");
         $updateUser->execute([
             ':phone' => $regData['phone'],
             ':address' => $detailedAddress,
             ':city' => $city,
             ':postal_code' => $postalCode,
+            ':payout_provider' => $regData['payout_provider'],
+            ':payout_name' => $regData['payout_name'],
+            ':payout_number' => $regData['payout_number'],
+            ':payout_qr_code' => $regData['payout_qr_code'],
             ':user_id' => $userId
         ]);
 

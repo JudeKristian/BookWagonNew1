@@ -75,7 +75,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Attach event listeners to Add to Cart buttons
     document.querySelectorAll('.add-to-cart-btn').forEach(button => {
-        button.addEventListener('click', function() {
+        button.addEventListener('click', function(event) {
+            // Check if user is a guest (using global function injected in footer)
+            if (typeof window.isGuest !== 'undefined' && window.isGuest) {
+                if (typeof requireLogin === 'function') {
+                    return requireLogin(event, true);
+                }
+            }
+            
             const bookId = this.dataset.bookId;
             const purchaseType = this.dataset.purchaseType || 'buy';
             

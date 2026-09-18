@@ -2,6 +2,7 @@
 include("session.php");
 include("connect.php");
 require_once("includes/audit_logger.php");
+require_once("includes/notification_helper.php");
 
 $userType = $_SESSION['usertype'] ?? '';
 $userId = $_SESSION['id'] ?? 0;
@@ -19,16 +20,36 @@ $userStmt->bind_param("i", $userId);
 $userStmt->execute();
 $userData = $userStmt->get_result()->fetch_assoc() ?? [];
 
-// Fetch current cart items with book details and seller details
+// Handle selected items
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['selected_items']) && is_array($_POST['selected_items'])) {
+    // Coming from cart.php
+    $_SESSION['checkout_selected_items'] = array_map('intval', $_POST['selected_items']);
+}
+
+$selectedItems = $_SESSION['checkout_selected_items'] ?? [];
+
+if (empty($selectedItems)) {
+    $_SESSION['cart_message'] = "Please select items to checkout.";
+    $_SESSION['cart_message_type'] = "warning";
+    header("Location: cart.php");
+    exit();
+}
+
+// Fetch current cart items with book details and seller details, filtered by selected items
+$placeholders = str_repeat('?,', count($selectedItems) - 1) . '?';
 $cartQuery = "SELECT c.*, b.title, b.author, b.price, b.rent_price, b.cover_image, 
                      b.security_deposit, b.book_value, b.stock, b.user_id AS seller_id, b.meetup_location,
                      u.firstname AS seller_first, u.lastname AS seller_last
               FROM cart c
               JOIN books b ON c.book_id = b.book_id
               JOIN users u ON b.user_id = u.id
-              WHERE c.user_id = ?";
+              WHERE c.user_id = ? AND c.cart_id IN ($placeholders)";
+
+$types = "i" . str_repeat('i', count($selectedItems));
+$params = array_merge([$userId], $selectedItems);
+
 $cartStmt = $conn->prepare($cartQuery);
-$cartStmt->bind_param("i", $userId);
+$cartStmt->bind_param($types, ...$params);
 $cartStmt->execute();
 $cartResult = $cartStmt->get_result();
 $cartItems = [];
@@ -100,18 +121,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Handle ID Upload for Rentals
     if ($hasRental && (!isset($userData['id_verified_status']) || $userData['id_verified_status'] !== 'verified')) {
         if (isset($_FILES['valid_id']) && $_FILES['valid_id']['error'] === UPLOAD_ERR_OK) {
+            $file = $_FILES['valid_id'];
+            
+            // 1. File size check (max 5MB)
+            if ($file['size'] > 5 * 1024 * 1024) {
+                $_SESSION['checkout_error'] = "Uploaded ID exceeds maximum allowed size of 5MB.";
+                header("Location: checkout.php");
+                exit();
+            }
+
+            // 2. Extension whitelist
+            $fileExt = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            $allowedIdExts = ['jpg', 'jpeg', 'png', 'webp', 'pdf'];
+            if (!in_array($fileExt, $allowedIdExts)) {
+                $_SESSION['checkout_error'] = "Invalid ID file type. Only JPG, PNG, WEBP, and PDF are allowed.";
+                header("Location: checkout.php");
+                exit();
+            }
+
+            // 3. Server-side MIME type inspection
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            if ($finfo !== false) {
+                $mimeType = finfo_file($finfo, $file['tmp_name']);
+                finfo_close($finfo);
+                $allowedIdMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+                if (!in_array($mimeType, $allowedIdMimes)) {
+                    $_SESSION['checkout_error'] = "Invalid ID document format.";
+                    header("Location: checkout.php");
+                    exit();
+                }
+            }
+
             $uploadDir = 'uploads/ids/';
             if (!is_dir($uploadDir)) {
                 mkdir($uploadDir, 0777, true);
             }
-            $fileExt = strtolower(pathinfo($_FILES['valid_id']['name'], PATHINFO_EXTENSION));
-            $fileName = 'id_' . $userId . '_' . time() . '.' . $fileExt;
+            $fileName = 'id_' . $userId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $fileExt;
             $targetFilePath = $uploadDir . $fileName;
             
-            if (move_uploaded_file($_FILES['valid_id']['tmp_name'], $targetFilePath)) {
+            if (move_uploaded_file($file['tmp_name'], $targetFilePath)) {
+                chmod($targetFilePath, 0644);
                 $updateIdStmt = $conn->prepare("UPDATE users SET id_verified_status = 'pending', id_image_path = ? WHERE id = ?");
                 $updateIdStmt->bind_param("si", $targetFilePath, $userId);
                 $updateIdStmt->execute();
+                $updateIdStmt->close();
             } else {
                 $_SESSION['checkout_error'] = "Failed to upload ID. Please try again.";
                 header("Location: checkout.php");
@@ -131,9 +184,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Payment Status & Reference logic
     if ($paymentMethod === 'qrph') {
-        $paymentStatus = 'paid';
-        $paymentReceipt = 'QRPH-' . date('Ymd') . '-' . strtoupper(substr(md5(uniqid(rand(), true)), 0, 6));
-        $orderStatus = 'processing';
+        if (!isset($_FILES['payment_receipt_image']) || $_FILES['payment_receipt_image']['error'] !== UPLOAD_ERR_OK) {
+            $_SESSION['checkout_error'] = "Payment receipt image is required for QR Ph payments.";
+            header("Location: checkout.php");
+            exit();
+        }
+
+        $receiptFile = $_FILES['payment_receipt_image'];
+
+        // 1. File size check (max 5MB)
+        if ($receiptFile['size'] > 5 * 1024 * 1024) {
+            $_SESSION['checkout_error'] = "Payment receipt exceeds maximum allowed size of 5MB.";
+            header("Location: checkout.php");
+            exit();
+        }
+
+        // 2. Extension check
+        $fileExt = strtolower(pathinfo($receiptFile['name'], PATHINFO_EXTENSION));
+        $allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+        if (!in_array($fileExt, $allowedExts)) {
+            $_SESSION['checkout_error'] = "Invalid receipt format. Only JPG, PNG, and WEBP are allowed.";
+            header("Location: checkout.php");
+            exit();
+        }
+
+        // 3. Server-side MIME check
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        if ($finfo !== false) {
+            $mimeType = finfo_file($finfo, $receiptFile['tmp_name']);
+            finfo_close($finfo);
+            $allowedReceiptMimes = ['image/jpeg', 'image/png', 'image/webp'];
+            if (!in_array($mimeType, $allowedReceiptMimes)) {
+                $_SESSION['checkout_error'] = "Invalid receipt image format.";
+                header("Location: checkout.php");
+                exit();
+            }
+        }
+
+        $uploadDir = 'uploads/receipts/';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
+
+        $fileName = 'receipt_' . $userId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $fileExt;
+        $targetFilePath = $uploadDir . $fileName;
+
+        if (!move_uploaded_file($receiptFile['tmp_name'], $targetFilePath)) {
+            $_SESSION['checkout_error'] = "Failed to upload payment receipt. Please try again.";
+            header("Location: checkout.php");
+            exit();
+        }
+        chmod($targetFilePath, 0644);
+
+        $paymentStatus = 'pending_verification';
+        $paymentReceipt = $targetFilePath;
+        $orderStatus = 'pending';
         $paymentDate = date('Y-m-d H:i:s');
     } elseif ($paymentMethod === 'cod') {
         $paymentStatus = 'pending';
@@ -170,73 +275,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $orderStmt->execute();
         $orderId = $conn->insert_id;
         
-        // 2. Insert order items & handle book rentals
+        // 2. Insert order items
         $itemSql = "INSERT INTO order_items (order_id, book_id, seller_id, quantity, purchase_type, rental_weeks, unit_price, status) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')";
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_meetup')";
         $itemStmt = $conn->prepare($itemSql);
-        
-        $rentalSql = "INSERT INTO book_rentals (user_id, book_id, seller_id, order_id, rental_date, due_date, rental_weeks, status, total_price) 
-                      VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? WEEK), ?, 'active', ?)";
-        $rentalStmt = $conn->prepare($rentalSql);
         
         $stockSql = "UPDATE books SET stock = GREATEST(0, stock - ?) WHERE book_id = ?";
         $stockStmt = $conn->prepare($stockSql);
         
+        $notifiedSellers = [];
         foreach ($cartItems as $item) {
             $bId = (int)$item['book_id'];
             $sId = (int)$item['seller_id'];
             $qty = (int)$item['quantity'];
             $pType = $item['purchase_type'];
-            $rWeeks = ($pType === 'rent') ? (int)$item['rental_weeks'] : null;
+            $rWeeks = ($pType === 'rent') ? (int)$item['rental_weeks'] : 0;
             $uPrice = (float)$item['computed_unit_price'];
             
             // Insert order item: order_id(i), book_id(i), seller_id(i), quantity(i), purchase_type(s), rental_weeks(i), unit_price(d)
             $itemStmt->bind_param("iiiisid", $orderId, $bId, $sId, $qty, $pType, $rWeeks, $uPrice);
             $itemStmt->execute();
-            
-            // If rental, register active rental
-            if ($pType === 'rent') {
-                $rentalCost = $uPrice * $qty;
-                $rentalWeeksVal = max(1, (int)$item['rental_weeks']);
-                
-                // book_rentals.seller_id references sellers(id), NOT users(id)
-                $sellersTableId = 0;
-                $sellerLookStmt = $conn->prepare("SELECT id FROM sellers WHERE user_id = ?");
-                $sellerLookStmt->bind_param("i", $sId);
-                $sellerLookStmt->execute();
-                $sRes = $sellerLookStmt->get_result();
-                if ($sRow = $sRes->fetch_assoc()) {
-                    $sellersTableId = (int)$sRow['id'];
-                } else {
-                    // Fallback create seller profile if not present so FK constraint is satisfied
-                    $uStmt = $conn->prepare("SELECT firstname, lastname, email FROM users WHERE id = ?");
-                    $uStmt->bind_param("i", $sId);
-                    $uStmt->execute();
-                    $uData = $uStmt->get_result()->fetch_assoc() ?? [];
-                    $shopName = ($uData['firstname'] ?? 'Seller') . "'s Store";
-                    $first = $uData['firstname'] ?? 'Seller';
-                    $last = $uData['lastname'] ?? 'Store';
-                    $bEmail = $uData['email'] ?? ('seller' . $sId . '@bookwagon.com');
-                    
-                    $createS = $conn->prepare("INSERT INTO sellers (user_id, shop_name, first_name, last_name, business_email, status) VALUES (?, ?, ?, ?, ?, 'approved')");
-                    $createS->bind_param("issss", $sId, $shopName, $first, $last, $bEmail);
-                    $createS->execute();
-                    $sellersTableId = $conn->insert_id;
-                }
-                
-                $rentalStmt->bind_param("iiiiisd", $userId, $bId, $sellersTableId, $orderId, $rentalWeeksVal, $rentalWeeksVal, $rentalCost);
-                $rentalStmt->execute();
-            }
-            
+
             // Update stock
             $stockStmt->bind_param("ii", $qty, $bId);
             $stockStmt->execute();
+            
+            // Send notification to seller (once per seller per order, ONLY if not pending verification)
+            if (!in_array($sId, $notifiedSellers) && $paymentStatus !== 'pending_verification') {
+                $notifContent = "You have received a new order! Please check your pending orders for details.";
+                sendNotification($conn, $sId, $userId, 'new_order', $notifContent);
+                $notifiedSellers[] = $sId;
+            }
         }
         
-        // 3. Clear user cart
-        $clearStmt = $conn->prepare("DELETE FROM cart WHERE user_id = ?");
-        $clearStmt->bind_param("i", $userId);
+        // 3. Clear selected user cart items
+        $clearStmt = $conn->prepare("DELETE FROM cart WHERE user_id = ? AND cart_id IN ($placeholders)");
+        $clearStmt->bind_param($types, ...$params);
         $clearStmt->execute();
+        unset($_SESSION['checkout_selected_items']);
         
         // 4. Record audit log
         $activityDetails = "Placed Order #$orderId | Total: ₱" . number_format($grandTotal, 2) . " | Payment: " . strtoupper($paymentMethod);
@@ -470,18 +546,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="row g-2">
                             <div class="col-6">
                                 <label class="form-label" for="first_name">First Name</label>
-                                <input type="text" class="form-control" id="first_name" name="first_name" 
+                                <input type="text" class="form-control bw-name" id="first_name" name="first_name" 
                                        value="<?php echo htmlspecialchars($userData['firstname'] ?? ''); ?>" required>
                             </div>
                             <div class="col-6">
                                 <label class="form-label" for="last_name">Last Name</label>
-                                <input type="text" class="form-control" id="last_name" name="last_name" 
+                                <input type="text" class="form-control bw-name" id="last_name" name="last_name" 
                                        value="<?php echo htmlspecialchars($userData['lastname'] ?? ''); ?>" required>
                             </div>
                             
                             <div class="col-6">
                                 <label class="form-label" for="phone">Phone Number</label>
-                                <input type="tel" class="form-control" id="phone" name="phone" placeholder="09XXXXXXXXX"
+                                <input type="tel" class="form-control bw-phone" id="phone" name="phone" placeholder="0917 123 4567"
                                        value="<?php echo htmlspecialchars($userData['phone'] ?? ''); ?>" required>
                             </div>
                             <div class="col-6">
@@ -528,12 +604,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="option-left">
                                 <input type="radio" name="payment_method" value="qrph" checked onchange="selectPaymentMethod('qrph', this)">
                                 <div>
-                                    <div class="option-name">QR Ph (GCash / Maya)</div>
-                                    <small class="text-muted" style="font-size: 0.75rem;">Instant e-wallet demo</small>
+                                    <div class="option-name">QR Ph (E-Wallet)</div>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Upload payment receipt</small>
                                 </div>
                             </div>
-                            <span class="badge bg-light text-dark border" style="font-size: 0.7rem;">Demo</span>
                         </label>
+                        
+                        <div id="qrph-upload-section" class="p-3 mb-3 border rounded" style="background-color: #f8f9fa;">
+                            <div class="text-center mb-3">
+                                <!-- Dummy Admin QR Code -->
+                                <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=BOOKWAGON-PAYMENT" 
+                                     alt="BookWagon QR Code" style="max-width: 160px;" class="img-thumbnail rounded">
+                                <p class="mt-2 mb-1 fw-bold text-dark">BookWagon Admin</p>
+                                <p class="text-muted m-0" style="font-size: 0.85rem;">Scan the QR code to pay <strong>₱<?php echo number_format($subtotal + $totalDeposit, 2); ?></strong></p>
+                            </div>
+                            <hr>
+                            <div class="mb-2">
+                                <label class="form-label fw-semibold" for="payment_receipt_image" style="font-size: 0.9rem;">Upload Transfer Receipt <span class="text-danger">*</span></label>
+                                <input type="file" class="form-control" id="payment_receipt_image" name="payment_receipt_image" accept="image/*" required>
+                                <div class="form-text" style="font-size: 0.75rem;">Please upload a screenshot of your successful transaction.</div>
+                            </div>
+                        </div>
 
                         <!-- Removed Cash on Delivery (COD) as requested -->
 
@@ -617,52 +708,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
     </div>
 
-    <!-- Simple QR Ph Modal -->
-    <div class="modal fade" id="qrphModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered" style="max-width: 380px;">
-            <div class="modal-content" style="border-radius: 10px; border: 1px solid var(--bw-border);">
-                
-                <div class="modal-header py-2 px-3">
-                    <h6 class="modal-title fw-bold" style="font-size: 0.9rem;">QR Ph Payment</h6>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-
-                <div class="modal-body text-center p-3">
-                    <div class="text-muted" style="font-size: 0.78rem;">Total to Pay</div>
-                    <div class="fw-bold mb-3" style="font-size: 1.5rem;" id="modalTotalAmount">
-                        ₱<?php echo number_format($subtotal + $totalDeposit, 2); ?>
-                    </div>
-
-                    <!-- Clean QR image -->
-                    <div class="mb-3">
-                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=BOOKWAGON-PAYMENT-DEMO" 
-                             alt="QR Code" style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px; width: 160px; height: 160px;">
-                    </div>
-
-                    <div class="text-muted mb-3" style="font-size: 0.75rem;">
-                        Scan with GCash, Maya, or any banking app
-                    </div>
-
-                    <?php if ($totalDeposit > 0): ?>
-                        <div class="text-start mb-3">
-                            <label class="form-label" style="font-size: 0.78rem;" for="input_refund_mobile">
-                                GCash / Maya Number (for Deposit Return):
-                            </label>
-                            <input type="tel" class="form-control form-control-sm" id="input_refund_mobile" 
-                                   placeholder="09XXXXXXXXX" value="<?php echo htmlspecialchars($userData['phone'] ?? ''); ?>">
-                        </div>
-                    <?php endif; ?>
-
-                    <button type="button" class="btn btn-warning w-100 py-2 fw-semibold text-dark" 
-                            style="background: #f8a100; border: none; font-size: 0.88rem;" 
-                            onclick="executeSimulatedPayment()">
-                        Simulate Payment (Demo)
-                    </button>
-                </div>
-
-            </div>
-        </div>
-    </div>
+    <!-- QR Modal Removed for Inline Flow -->
 
     <!-- Global Footer -->
     <?php include("include/footer.php"); ?>
@@ -688,12 +734,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             radioEl.closest('.option-item').classList.add('active');
 
             const btnText = document.getElementById('btnPlaceOrderText');
+            const uploadSection = document.getElementById('qrph-upload-section');
+            const uploadInput = document.getElementById('payment_receipt_image');
+
             if (method === 'qrph') {
-                btnText.textContent = 'Pay with QR Ph';
-            } else if (method === 'cod') {
-                btnText.textContent = 'Place Order (Cash)';
+                btnText.textContent = 'Submit Order & Receipt';
+                uploadSection.style.display = 'block';
+                uploadInput.required = true;
             } else {
-                btnText.textContent = 'Place Order (Bank)';
+                btnText.textContent = 'Place Order';
+                uploadSection.style.display = 'none';
+                uploadInput.required = false;
             }
         }
 
@@ -703,22 +754,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 form.reportValidity();
                 return;
             }
-
-            if (selectedPayment === 'qrph') {
-                const qrModal = new bootstrap.Modal(document.getElementById('qrphModal'));
-                qrModal.show();
-            } else {
-                form.submit();
-            }
+            form.submit();
         }
 
-        function executeSimulatedPayment() {
-            const refundInput = document.getElementById('input_refund_mobile');
-            if (refundInput) {
-                document.getElementById('hidden_refund_mobile').value = refundInput.value.trim();
-            }
-            document.getElementById('checkoutForm').submit();
-        }
+
     </script>
 </body>
 </html>

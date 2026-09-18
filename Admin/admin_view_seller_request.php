@@ -10,6 +10,7 @@ if(!isset($_SESSION["admin_loggedin"]) || $_SESSION["admin_loggedin"] !== true){
 
 // Include database connection
 require_once "db_connect.php";
+require_once "../includes/notification_helper.php";
 
 // Check if ID is provided
 if(!isset($_GET['id']) || empty($_GET['id'])) {
@@ -20,7 +21,7 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 $id = $_GET['id'];
 
 // Fetch seller request details
-$sql = "SELECT s.*, u.email, u.username, u.created_at as user_created_at 
+$sql = "SELECT s.*, u.email, u.username, u.created_at as user_created_at, u.payout_provider, u.payout_name, u.payout_number, u.payout_qr_code 
         FROM sellers s 
         JOIN users u ON s.user_id = u.id 
         WHERE s.id = ?";
@@ -64,6 +65,10 @@ if(isset($_POST['action'])) {
             
             $success_message = "Seller request approved successfully!";
             
+            // Send notification
+            $notifContent = "Congratulations! Your seller application for '" . $seller['shop_name'] . "' has been approved. You can now start listing books.";
+            sendNotification($conn, $seller['user_id'], $_SESSION['admin_id'] ?? 1, 'seller_approved', $notifContent);
+            
             // Refresh seller data
             $stmt = $conn->prepare($sql);
             $stmt->bind_param("i", $id);
@@ -84,6 +89,10 @@ if(isset($_POST['action'])) {
         
         if($stmt->execute()) {
             $success_message = "Seller request rejected.";
+            
+            // Send notification
+            $notifContent = "Your seller application for '" . $seller['shop_name'] . "' was not approved at this time. Please contact support for more details.";
+            sendNotification($conn, $seller['user_id'], $_SESSION['admin_id'] ?? 1, 'seller_rejected', $notifContent);
             
             // Refresh seller data
             $stmt = $conn->prepare($sql);
@@ -312,6 +321,33 @@ if ($res && $row = $res->fetch_assoc()) $pendingSellers = $row['cnt'];
                         <div class="detail-label">Member Since:</div>
                         <div class="detail-value"><?php echo date('M d, Y', strtotime($seller['user_created_at'])); ?></div>
                     </div>
+                </div>
+
+                <div class="detail-section">
+                    <h4><i class="fa-solid fa-qrcode" style="color: var(--primary); margin-right: 8px;"></i> E-Wallet Payout Details</h4>
+                    <div class="detail-row">
+                        <div class="detail-label">Provider:</div>
+                        <div class="detail-value" style="font-weight: 600;"><?php echo htmlspecialchars($seller['payout_provider'] ?? 'Not Provided'); ?></div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">Account Name:</div>
+                        <div class="detail-value" style="font-weight: 600; color: #b45309;">
+                            <?php echo htmlspecialchars($seller['payout_name'] ?? 'Not Provided'); ?>
+                            <?php if (!empty($seller['payout_name'])): ?>
+                                <br><small class="text-muted fw-normal" style="font-size:11px;">Must match Full Name above</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">Account Number:</div>
+                        <div class="detail-value"><?php echo htmlspecialchars($seller['payout_number'] ?? 'Not Provided'); ?></div>
+                    </div>
+                    <?php if(!empty($seller['payout_qr_code']) && file_exists('../' . $seller['payout_qr_code'])): ?>
+                    <div style="margin-top: 10px;">
+                        <div class="detail-label" style="margin-bottom: 5px;">QR Code:</div>
+                        <img src="../<?php echo htmlspecialchars($seller['payout_qr_code']); ?>" alt="QR Code" style="max-height: 150px; border-radius: 8px; border: 1px solid #e2e8f0; padding: 5px;">
+                    </div>
+                    <?php endif; ?>
                 </div>
 
                 <div class="detail-section">

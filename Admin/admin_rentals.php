@@ -38,6 +38,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($damageFee > $depositHeld) $damageFee = $depositHeld;
             $renterRefund = max(0, $depositHeld - $damageFee);
 
+            // Fetch renter ID and seller ID
+            $renterId = 0;
+            $sellerId = 0;
+            $sellerUserId = 0;
+            $stmtRenter = $conn->prepare("SELECT user_id, seller_id FROM book_rentals WHERE rental_id = ?");
+            $stmtRenter->bind_param("i", $rentalId);
+            $stmtRenter->execute();
+            $resRenter = $stmtRenter->get_result();
+            if ($row = $resRenter->fetch_assoc()) {
+                $renterId = intval($row['user_id']);
+                $sellerId = intval($row['seller_id']);
+            }
+            $stmtRenter->close();
+            
+            if ($sellerId > 0) {
+                $stmtSeller = $conn->prepare("SELECT user_id FROM sellers WHERE id = ?");
+                $stmtSeller->bind_param("i", $sellerId);
+                $stmtSeller->execute();
+                $resSeller = $stmtSeller->get_result();
+                if ($rowSeller = $resSeller->fetch_assoc()) {
+                    $sellerUserId = intval($rowSeller['user_id']);
+                }
+                $stmtSeller->close();
+            }
+
             // Update return record
             if ($returnId > 0) {
                 $stmt = $conn->prepare("UPDATE book_returns SET damage_fee = ?, status = 'completed', completed_date = NOW() WHERE return_id = ?");
@@ -53,13 +78,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->close();
 
             // Restock book
-            $conn->query("UPDATE books b JOIN book_rentals br ON b.book_id = br.book_id SET b.stock = COALESCE(b.stock, 0) + 1 WHERE br.rental_id = $rentalId");
+            $stmtRestock = $conn->prepare("UPDATE books b JOIN book_rentals br ON b.book_id = br.book_id SET b.stock = COALESCE(b.stock, 0) + 1 WHERE br.rental_id = ?");
+            $stmtRestock->bind_param("i", $rentalId);
+            $stmtRestock->execute();
+            $stmtRestock->close();
+
+            // Credit Renter's Unified Wallet with their refund portion
+            if ($renterId > 0 && $renterRefund > 0) {
+                $stmt = $conn->prepare("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?");
+                $stmt->bind_param("di", $renterRefund, $renterId);
+                $stmt->execute();
+                $stmt->close();
+            }
+
+            // Credit Seller's Unified Wallet with their damage compensation
+            if ($sellerUserId > 0 && $damageFee > 0) {
+                $stmt = $conn->prepare("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?");
+                $stmt->bind_param("di", $damageFee, $sellerUserId);
+                $stmt->execute();
+                $stmt->close();
+            }
 
             // Audit Trail
-            $details = "Admin approved damage settlement for Rental #$rentalId. Deposit: ₱" . number_format($depositHeld, 2) . " -> Seller Awarded: ₱" . number_format($damageFee, 2) . " | Student Refund: ₱" . number_format($renterRefund, 2) . ". Notes: $sellerNotes";
+            $details = "Admin approved damage settlement for Rental #$rentalId. Deposit: ₱" . number_format($depositHeld, 2) . " -> Seller Awarded: ₱" . number_format($damageFee, 2) . " | Student Refund: ₱" . number_format($renterRefund, 2) . " (Credited to Wallet). Notes: $sellerNotes";
             log_admin_event($conn, $adminId, 'ESCROW_DAMAGE_SETTLED', $details);
 
-            $message = "success|Damage settlement finalized. ₱" . number_format($damageFee, 2) . " transferred to seller as compensation, and ₱" . number_format($renterRefund, 2) . " released to the student.";
+            $message = "success|Damage settlement finalized. ₱" . number_format($damageFee, 2) . " transferred to seller as compensation, and ₱" . number_format($renterRefund, 2) . " credited to the student's BookWagon Wallet.";
         }
     }
 
@@ -71,6 +115,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $reason = trim($_POST['forfeit_reason'] ?? 'Delinquent non-return: grace period expired');
 
         if ($rentalId > 0 && $renterId > 0) {
+            // Fetch seller ID to credit their wallet
+            $sellerId = 0;
+            $sellerUserId = 0;
+            $stmtRental = $conn->prepare("SELECT seller_id FROM book_rentals WHERE rental_id = ?");
+            $stmtRental->bind_param("i", $rentalId);
+            $stmtRental->execute();
+            $resRental = $stmtRental->get_result();
+            if ($row = $resRental->fetch_assoc()) {
+                $sellerId = intval($row['seller_id']);
+            }
+            $stmtRental->close();
+
+            if ($sellerId > 0) {
+                $stmtSeller = $conn->prepare("SELECT user_id FROM sellers WHERE id = ?");
+                $stmtSeller->bind_param("i", $sellerId);
+                $stmtSeller->execute();
+                $resSeller = $stmtSeller->get_result();
+                if ($rowSeller = $resSeller->fetch_assoc()) {
+                    $sellerUserId = intval($rowSeller['user_id']);
+                }
+                $stmtSeller->close();
+            }
+
             // Mark rental as lost
             $stmt = $conn->prepare("UPDATE book_rentals SET status = 'lost' WHERE rental_id = ?");
             $stmt->bind_param("i", $rentalId);
@@ -82,6 +149,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->bind_param("i", $renterId);
             $stmt->execute();
             $stmt->close();
+
+            // Credit Seller's Unified Wallet with the full forfeited deposit
+            if ($sellerUserId > 0 && $depositHeld > 0) {
+                $stmt = $conn->prepare("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?");
+                $stmt->bind_param("di", $depositHeld, $sellerUserId);
+                $stmt->execute();
+                $stmt->close();
+            }
 
             // Audit Trail
             $details = "Admin declared Rental #$rentalId LOST. 100% Escrow deposit (₱" . number_format($depositHeld, 2) . ") forfeited to seller. Delinquent renter ID #$renterId was SUSPENDED. Reason: $reason";
@@ -96,18 +171,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $rentalId = intval($_POST['rental_id'] ?? 0);
         $returnId = intval($_POST['return_id'] ?? 0);
         $depositHeld = floatval($_POST['deposit_held'] ?? 0);
+        $refundNotes = trim($_POST['refund_notes'] ?? 'Manual refund processed');
 
         if ($rentalId > 0) {
-            if ($returnId > 0) {
-                $conn->query("UPDATE book_returns SET status = 'completed', completed_date = NOW(), damage_fee = 0.00 WHERE return_id = $returnId");
+            // Prevent double refunding if already settled
+            $stmtCheck = $conn->prepare("SELECT status FROM book_rentals WHERE rental_id = ?");
+            $stmtCheck->bind_param("i", $rentalId);
+            $stmtCheck->execute();
+            $checkRes = $stmtCheck->get_result();
+            $rentalData = $checkRes->fetch_assoc();
+            $stmtCheck->close();
+            
+            if ($rentalData && $rentalData['status'] === 'returned') {
+                $message = "error|This rental has already been refunded and settled.";
+            } else {
+                // Fetch renter ID to credit their wallet
+                $renterId = 0;
+                $stmtRenter = $conn->prepare("SELECT user_id FROM book_rentals WHERE rental_id = ?");
+                $stmtRenter->bind_param("i", $rentalId);
+                $stmtRenter->execute();
+                $resRenter = $stmtRenter->get_result();
+                if ($row = $resRenter->fetch_assoc()) {
+                    $renterId = intval($row['user_id']);
+                }
+                $stmtRenter->close();
+
+                if ($returnId > 0) {
+                    $stmtRet = $conn->prepare("UPDATE book_returns SET status = 'completed', completed_date = NOW(), damage_fee = 0.00 WHERE return_id = ?");
+                    $stmtRet->bind_param("i", $returnId);
+                    $stmtRet->execute();
+                    $stmtRet->close();
+                }
+                $stmtRent = $conn->prepare("UPDATE book_rentals SET status = 'returned', return_date = NOW() WHERE rental_id = ?");
+                $stmtRent->bind_param("i", $rentalId);
+                $stmtRent->execute();
+                $stmtRent->close();
+
+                $stmtStock = $conn->prepare("UPDATE books b JOIN book_rentals br ON b.book_id = br.book_id SET b.stock = COALESCE(b.stock, 0) + 1 WHERE br.rental_id = ?");
+                $stmtStock->bind_param("i", $rentalId);
+                $stmtStock->execute();
+                $stmtStock->close();
+
+                // Credit Renter's Unified Wallet with full deposit
+                if ($renterId > 0 && $depositHeld > 0) {
+                    $stmt = $conn->prepare("UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?");
+                    $stmt->bind_param("di", $depositHeld, $renterId);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+
+                $details = "Admin confirmed clean return for Rental #$rentalId. 100% Escrow deposit (₱" . number_format($depositHeld, 2) . ") credited to renter's wallet. Refund Notes: $refundNotes";
+                log_admin_event($conn, $adminId, 'ESCROW_CLEAN_RELEASE', $details);
+
+                $message = "success|Full deposit (₱" . number_format($depositHeld, 2) . ") successfully credited to the renter's BookWagon Wallet. Rental marked completed.";
             }
-            $conn->query("UPDATE book_rentals SET status = 'returned', return_date = NOW() WHERE rental_id = $rentalId");
-            $conn->query("UPDATE books b JOIN book_rentals br ON b.book_id = br.book_id SET b.stock = COALESCE(b.stock, 0) + 1 WHERE br.rental_id = $rentalId");
-
-            $details = "Admin confirmed clean return for Rental #$rentalId. 100% Escrow deposit (₱" . number_format($depositHeld, 2) . ") released to student.";
-            log_admin_event($conn, $adminId, 'ESCROW_CLEAN_RELEASE', $details);
-
-            $message = "success|Full deposit (₱" . number_format($depositHeld, 2) . ") released to renter. Rental marked completed.";
         }
     }
 }
@@ -120,7 +237,7 @@ $disputeReviewsCount = 0;
 
 $res = $conn->query("
     SELECT 
-        SUM(COALESCE(b.price, 250)) as total_escrow,
+        SUM(COALESCE(NULLIF(b.security_deposit, 0), NULLIF(b.book_value, 0), 0)) as total_escrow,
         COUNT(CASE WHEN r.status = 'active' AND r.due_date >= NOW() THEN 1 END) as active_count,
         COUNT(CASE WHEN r.status = 'overdue' OR (r.status = 'active' AND r.due_date < NOW()) THEN 1 END) as overdue_count
     FROM book_rentals r
@@ -149,7 +266,9 @@ $sql = "
         r.rental_id, r.order_id, r.book_id, r.user_id as renter_id, r.seller_id,
         r.rental_weeks, r.rental_date, r.due_date, r.return_date, r.total_price, r.late_fee, r.status as rental_status,
         b.title as book_title, b.author as book_author, COALESCE(b.price, 250.00) as book_price, COALESCE(b.rent_price, 0) as rental_price,
+        b.security_deposit, b.book_value,
         u.firstname as renter_fn, u.lastname as renter_ln, u.email as renter_email, u.status as renter_status,
+        u.payout_provider, u.payout_number, u.payout_name, u.payout_qr_code,
         COALESCE(sel.shop_name, 'Direct Seller') as shop_name,
         COALESCE(sel_u.firstname, 'Seller') as seller_fn, COALESCE(sel_u.lastname, '') as seller_ln, COALESCE(sel_u.email, '-') as seller_email,
         ret.return_id, ret.status as return_status, ret.book_condition, ret.damage_fee, ret.return_method, ret.return_details
@@ -343,7 +462,8 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     <div class="modal-overlay" id="settleModal">
         <div class="modal-box">
             <h3 style="color: var(--text-dark);"><i class="fa-solid fa-scale-balanced" style="color: var(--primary); margin-right: 8px;"></i>Arbitrate Damage Settlement</h3>
-            <p>Review the physical damage assessment and authorize deposit disbursement between the student and store owner.</p>
+            <p>Review the physical damage assessment and authorize deposit disbursement between the renter and store owner.</p>
+
             
             <form method="POST">
                 <input type="hidden" name="action" value="settle_damage">
@@ -361,7 +481,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                         <strong id="modalDepositDisplay">₱0.00</strong>
                     </div>
                     <div class="calc-row">
-                        <span style="color: var(--text-muted);">Renter (Student):</span>
+                        <span style="color: var(--text-muted);">Renter:</span>
                         <span id="modalRenter">-</span>
                     </div>
                     <div class="calc-row">
@@ -381,7 +501,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                         <strong style="color: #b45309;" id="modalSellerPayout">₱0.00</strong>
                     </div>
                     <div class="calc-row total">
-                        <span>Net Refund to Student:</span>
+                        <span>Net Refund to Renter:</span>
                         <strong style="color: #047857;" id="modalRenterRefund">₱0.00</strong>
                     </div>
                 </div>
@@ -403,7 +523,8 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     <div class="modal-overlay" id="forfeitModal">
         <div class="modal-box">
             <h3 style="color: #b91c1c;"><i class="fa-solid fa-triangle-exclamation" style="margin-right: 8px;"></i>Declare Lost & Forfeit Escrow</h3>
-            <p>The grace period has expired and the student has not returned the book. As the platform intermediary, you will compensate the seller and enforce disciplinary action.</p>
+            <p>The grace period has expired and the renter has not returned the book. As the platform intermediary, you will compensate the seller and enforce disciplinary action.</p>
+
 
             <form method="POST">
                 <input type="hidden" name="action" value="forfeit_lost">
@@ -428,7 +549,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
 
                 <div style="background: #fff; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 12px; color: #9a3412;">
                     <i class="fa-solid fa-shield-halved" style="margin-right: 4px;"></i>
-                    <strong>Automated Security Action:</strong> Submitting this will automatically mark the student's account as <strong>Suspended</strong>, blocking them from logging in or initiating new rentals.
+                    <strong>Automated Security Action:</strong> Submitting this will automatically mark the renter's account as <strong>Suspended</strong>, blocking them from logging in or initiating new rentals.
                 </div>
 
                 <div style="margin-bottom: 16px;">
@@ -439,6 +560,47 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <div class="modal-actions">
                     <button type="button" class="btn-action" style="background: var(--bg); color: var(--text-muted);" onclick="closeForfeitModal()">Cancel</button>
                     <button type="submit" class="btn-action forfeit" style="padding: 10px 18px; font-size: 13px;"><i class="fa-solid fa-gavel" style="margin-right: 4px;"></i>Forfeit Escrow & Suspend</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Release Full Deposit -->
+    <div class="modal-overlay" id="releaseModal">
+        <div class="modal-box">
+            <h3 style="color: #047857;"><i class="fa-solid fa-hand-holding-dollar" style="margin-right: 8px;"></i>Release Full Deposit</h3>
+            <p>Automatically credit the escrow deposit back to the renter's BookWagon Wallet and record the transaction to settle the rental.</p>
+
+
+            <form method="POST">
+                <input type="hidden" name="action" value="release_full">
+                <input type="hidden" name="rental_id" id="releaseRentalId">
+                <input type="hidden" name="return_id" id="releaseReturnId">
+                <input type="hidden" name="deposit_held" id="releaseDepositHeld">
+
+                <div class="calc-breakdown" style="background: #ecfdf5; border-color: #a7f3d0; margin-bottom: 20px;">
+                    <div class="calc-row">
+                        <span style="color: #065f46;">Renter to Credit:</span>
+                        <strong id="releaseRenterName" style="color: #065f46;">-</strong>
+                    </div>
+                    <div class="calc-row total" style="color: #064e3b;">
+                        <span>Credit Amount:</span>
+                        <span id="releaseDepositDisplay">₱0.00</span>
+                    </div>
+                </div>
+
+                <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin-bottom: 20px; font-size: 13px; color: #334155;">
+                    <i class="fa-solid fa-circle-info" style="color: #f8a100; margin-right: 6px;"></i> The full deposit amount will be instantly credited to the renter's BookWagon Wallet balance. They can withdraw it or use it for future rentals.
+                </div>
+
+                <div style="margin-bottom: 16px;">
+                    <label style="display:block; font-size:12px; font-weight:600; margin-bottom:4px;">Action Notes (Optional):</label>
+                    <input type="text" name="refund_notes" class="modal-input" placeholder="e.g. Clean return confirmed" required>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn-action" style="background: var(--bg); color: var(--text-muted);" onclick="closeReleaseModal()">Cancel</button>
+                    <button type="submit" class="btn-action clean" style="padding: 10px 18px; font-size: 13px;"><i class="fa-solid fa-check" style="margin-right: 4px;"></i>Credit to Wallet Balance</button>
                 </div>
             </form>
         </div>
@@ -534,7 +696,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                         <thead>
                             <tr>
                                 <th>Rental Details</th>
-                                <th>Renter (Student)</th>
+                                <th>Renter</th>
                                 <th>Store / Seller</th>
                                 <th>Escrow Held</th>
                                 <th>Timeline & Condition</th>
@@ -552,7 +714,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                 </tr>
                             <?php else: ?>
                                 <?php foreach ($rentals as $r): 
-                                    $deposit = floatval($r['book_price']);
+                                    $deposit = floatval($r['security_deposit'] > 0 ? $r['security_deposit'] : ($r['book_value'] > 0 ? $r['book_value'] : 0));
                                     $isOverdue = ($r['rental_status'] === 'overdue' || ($r['rental_status'] === 'active' && strtotime($r['due_date']) < time()));
                                     $isDamaged = ($r['book_condition'] === 'damaged' || floatval($r['damage_fee']) > 0);
                                     
@@ -632,7 +794,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                     <td>
                                         <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                                             <?php if ($isDamaged && $r['rental_status'] !== 'returned'): ?>
-                                                <button type="button" class="btn-action settle" onclick='openSettleModal(<?php echo json_encode([
+                                                <button type="button" class="btn-action settle" onclick='openSettleModal(<?php echo htmlspecialchars(json_encode([
                                                     "rental_id" => $r["rental_id"],
                                                     "return_id" => $r["return_id"],
                                                     "book_title" => $r["book_title"],
@@ -640,27 +802,33 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                                     "damage_fee" => floatval($r["damage_fee"] ?: 100),
                                                     "renter_name" => $r["renter_fn"] . " " . $r["renter_ln"],
                                                     "seller_name" => $r["shop_name"]
-                                                ]); ?>)'>
+                                                ]), ENT_QUOTES, 'UTF-8'); ?>)'>
                                                     <i class="fa-solid fa-scale-balanced"></i> Arbitrate
                                                 </button>
                                             <?php elseif ($isOverdue && $r['rental_status'] !== 'lost'): ?>
-                                                <button type="button" class="btn-action forfeit" onclick='openForfeitModal(<?php echo json_encode([
+                                                <button type="button" class="btn-action forfeit" onclick='openForfeitModal(<?php echo htmlspecialchars(json_encode([
                                                     "rental_id" => $r["rental_id"],
                                                     "renter_id" => $r["renter_id"],
                                                     "book_title" => $r["book_title"],
                                                     "deposit" => $deposit,
                                                     "renter_name" => $r["renter_fn"] . " " . $r["renter_ln"]
-                                                ]); ?>)'>
+                                                ]), ENT_QUOTES, 'UTF-8'); ?>)'>
                                                     <i class="fa-solid fa-gavel"></i> Declare Lost
                                                 </button>
-                                            <?php elseif ($r['rental_status'] === 'active'): ?>
-                                                <form method="POST" style="display:inline;" onsubmit="return confirm('Release full deposit back to the student?');">
-                                                    <input type="hidden" name="action" value="release_full">
-                                                    <input type="hidden" name="rental_id" value="<?php echo $r['rental_id']; ?>">
-                                                    <input type="hidden" name="return_id" value="<?php echo $r['return_id'] ?? 0; ?>">
-                                                    <input type="hidden" name="deposit_held" value="<?php echo $deposit; ?>">
-                                                    <button type="submit" class="btn-action clean" title="Complete Clean Return"><i class="fa-solid fa-check"></i> Release</button>
-                                                </form>
+                                            <?php elseif ($r['rental_status'] === 'active' || $r['rental_status'] === 'return_pending'): ?>
+                                                <button type="button" class="btn-action clean" onclick='openReleaseModal(<?php echo htmlspecialchars(json_encode([
+                                                    "rental_id" => $r["rental_id"],
+                                                    "return_id" => $r["return_id"] ?? 0,
+                                                    "deposit" => $deposit,
+                                                    "renter_name" => $r["renter_fn"] . " " . $r["renter_ln"],
+                                                    "payout_provider" => $r["payout_provider"],
+                                                    "payout_name" => $r["payout_name"],
+                                                    "payout_number" => $r["payout_number"],
+                                                    "payout_qr_code" => $r["payout_qr_code"]
+                                                ]), ENT_QUOTES, 'UTF-8'); ?>)' title="Complete Clean Return & Refund">
+                                                    <i class="fa-solid fa-hand-holding-dollar"></i> Refund
+                                                </button>
+
                                             <?php else: ?>
                                                 <span style="font-size: 11px; color: var(--text-light); font-style: italic;">No pending action</span>
                                             <?php endif; ?>
@@ -744,12 +912,30 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             document.getElementById('forfeitModal').classList.remove('show');
         }
 
+        // Release Modal Functions
+        function openReleaseModal(data) {
+            document.getElementById('releaseRentalId').value = data.rental_id;
+            document.getElementById('releaseReturnId').value = data.return_id;
+            document.getElementById('releaseDepositHeld').value = data.deposit;
+            document.getElementById('releaseRenterName').innerText = data.renter_name;
+            document.getElementById('releaseDepositDisplay').innerText = '₱' + parseFloat(data.deposit).toFixed(2);
+
+            document.getElementById('releaseModal').classList.add('show');
+        }
+
+        function closeReleaseModal() {
+            document.getElementById('releaseModal').classList.remove('show');
+        }
+
         // Close on backdrop click
         document.getElementById('settleModal').addEventListener('click', function(e) {
             if (e.target === this) closeSettleModal();
         });
         document.getElementById('forfeitModal').addEventListener('click', function(e) {
             if (e.target === this) closeForfeitModal();
+        });
+        document.getElementById('releaseModal').addEventListener('click', function(e) {
+            if (e.target === this) closeReleaseModal();
         });
     </script>
 </body>

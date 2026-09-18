@@ -10,7 +10,7 @@
             
             <?php
             // Seller-mode notification types
-            $sellerNotifTypes = "'order_placed','order_update','rental_request','return_request','book_review','new_inquiry'";
+            $sellerNotifTypes = "'order_placed','order_update','rental_request','return_request','book_review','new_inquiry','product_approved','product_rejected'";
 
             // Get unread notifications count (seller types only)
             $unreadCount = 0;

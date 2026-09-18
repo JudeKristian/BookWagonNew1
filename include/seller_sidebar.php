@@ -7,6 +7,63 @@
  */
 
 if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
+
+// Fetch counts for notification badges
+$sb_pendingBooks = 0;
+$sb_pendingOrders = 0;
+$sb_pendingRentals = 0;
+$sb_pendingReturns = 0;
+
+if (isset($conn) && isset($_SESSION['user_id'])) {
+    $sb_userId = $_SESSION['user_id'];
+    $sb_sellerId = $_SESSION['seller_id'] ?? 0;
+    
+    // Fetch seller_id if not in session
+    if (!$sb_sellerId) {
+        $sb_sellerStmt = $conn->prepare("SELECT id FROM sellers WHERE user_id = ?");
+        if ($sb_sellerStmt) {
+            $sb_sellerStmt->bind_param("i", $sb_userId);
+            $sb_sellerStmt->execute();
+            $sb_sRes = $sb_sellerStmt->get_result()->fetch_assoc();
+            $sb_sellerId = $sb_sRes['id'] ?? 0;
+            $_SESSION['seller_id'] = $sb_sellerId;
+        }
+    }
+
+    if ($sb_sellerId > 0) {
+        // Pending Books (Rejected books)
+        $sb_bookStmt = $conn->prepare("SELECT COUNT(*) as cnt FROM books WHERE user_id = ? AND approval_status = 'rejected'");
+        if ($sb_bookStmt) {
+            $sb_bookStmt->bind_param("i", $sb_userId);
+            $sb_bookStmt->execute();
+            $sb_pendingBooks = $sb_bookStmt->get_result()->fetch_assoc()['cnt'] ?? 0;
+        }
+
+        // Pending Orders
+        $sb_ordStmt = $conn->prepare("SELECT COUNT(DISTINCT o.order_id) as cnt FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE oi.seller_id = ? AND o.order_status = 'pending'");
+        if ($sb_ordStmt) {
+            $sb_ordStmt->bind_param("i", $sb_sellerId);
+            $sb_ordStmt->execute();
+            $sb_pendingOrders = $sb_ordStmt->get_result()->fetch_assoc()['cnt'] ?? 0;
+        }
+
+        // Active/Overdue Rentals
+        $sb_rentStmt = $conn->prepare("SELECT COUNT(*) as cnt FROM book_rentals WHERE seller_id = ? AND status IN ('active', 'overdue')");
+        if ($sb_rentStmt) {
+            $sb_rentStmt->bind_param("i", $sb_sellerId);
+            $sb_rentStmt->execute();
+            $sb_pendingRentals = $sb_rentStmt->get_result()->fetch_assoc()['cnt'] ?? 0;
+        }
+
+        // Pending Return Requests
+        $sb_retStmt = $conn->prepare("SELECT COUNT(*) as cnt FROM book_returns WHERE seller_id = ? AND status = 'pending'");
+        if ($sb_retStmt) {
+            $sb_retStmt->bind_param("i", $sb_sellerId);
+            $sb_retStmt->execute();
+            $sb_pendingReturns = $sb_retStmt->get_result()->fetch_assoc()['cnt'] ?? 0;
+        }
+    }
+}
 ?>
 
 <!-- Seller Shared Styles -->
@@ -91,6 +148,20 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
 
     .nav-item.active i { color: #ffffff; }
     .nav-item i { width: 20px; text-align: center; font-size: 16px; }
+
+    .nav-badge {
+        margin-left: auto;
+        background: #ef4444; /* red color for notification */
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 50px;
+        min-width: 22px;
+        text-align: center;
+    }
+
+    .nav-item.active .nav-badge { background: rgba(255,255,255,0.3); }
 
     .sidebar-footer {
         padding: 16px 12px;
@@ -222,18 +293,34 @@ if (!isset($currentPage)) $currentPage = basename($_SERVER['PHP_SELF']);
         <a href="Manage_books.php" class="nav-item <?php echo ($currentPage === 'Manage_books.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-book"></i>
             Manage Books
+            <?php if ($sb_pendingBooks > 0): ?>
+                <span class="nav-badge" title="<?php echo $sb_pendingBooks; ?> rejected books"><?php echo $sb_pendingBooks; ?></span>
+            <?php endif; ?>
         </a>
         <a href="order.php" class="nav-item <?php echo ($currentPage === 'order.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-cart-shopping"></i>
             Orders
+            <?php if ($sb_pendingOrders > 0): ?>
+                <span class="nav-badge"><?php echo $sb_pendingOrders; ?></span>
+            <?php endif; ?>
         </a>
         <a href="renter.php" class="nav-item <?php echo ($currentPage === 'renter.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-hand-holding-dollar"></i>
             Rentals
+            <?php if ($sb_pendingRentals > 0): ?>
+                <span class="nav-badge"><?php echo $sb_pendingRentals; ?></span>
+            <?php endif; ?>
         </a>
         <a href="rental_request.php" class="nav-item <?php echo ($currentPage === 'rental_request.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-arrow-rotate-left"></i>
             Return Requests
+            <?php if ($sb_pendingReturns > 0): ?>
+                <span class="nav-badge"><?php echo $sb_pendingReturns; ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="seller_earnings.php" class="nav-item <?php echo ($currentPage === 'seller_earnings.php') ? 'active' : ''; ?>">
+            <i class="fa-solid fa-wallet"></i>
+            Earnings & Payouts
         </a>
         <a href="customers.php" class="nav-item <?php echo ($currentPage === 'customers.php') ? 'active' : ''; ?>">
             <i class="fa-solid fa-users"></i>

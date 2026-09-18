@@ -315,7 +315,7 @@ $lastName = $regData['last_name'] ?? $_SESSION['lastname'] ?? '';
                             <select class="form-select" id="seller_type" name="seller_type" required>
                                 <option value="Individual Book Owner">Individual Book Owner</option>
                                 <option value="Bookstore / Library Hub">Bookstore / Library Hub</option>
-                                <option value="Student Renter">Student Renter</option>
+                                <option value="Student Seller">Student Seller</option>
                             </select>
                         </div>
                     </div>
@@ -328,8 +328,8 @@ $lastName = $regData['last_name'] ?? $_SESSION['lastname'] ?? '';
                             <i class="fa-solid fa-location-dot"></i>
                         </div>
                         <div>
-                            <h5>Physical Pickup Address</h5>
-                            <small class="text-muted">Used for book handovers, swap meetups, and local delivery</small>
+                            <h5>Store Base Location</h5>
+                            <small class="text-muted">Your primary location. You can still set specific meet-up spots for each book you publish.</small>
                         </div>
                     </div>
 

@@ -17,8 +17,9 @@ if ($conn->connect_error) {
     die("System error: Unable to connect to the database. Please try again later.");
 }
 
-// Include audit logger
+// Include audit logger and mailer
 require_once 'includes/audit_logger.php';
+require_once 'includes/send_mail.php';
 
 // Initialize variables
 $firstName = $lastName = $email = $confirm_email = $password = $confirm_password = "";
@@ -138,12 +139,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // Check input errors before inserting into database
     if (empty($firstName_err) && empty($lastName_err) && empty($email_err) && empty($confirm_email_err) && empty($password_err) && empty($confirm_password_err) && empty($captcha_err)) {
         
+        // Generate a random 32-character token
+        $verification_token = bin2hex(random_bytes(16));
+        $is_verified = 0; // Default to unverified
+        
         // Prepare an insert statement (Removed middle name)
-        $sql = "INSERT INTO users (firstName, lastName, email, password) VALUES (?, ?, ?, ?)";
+        $sql = "INSERT INTO users (firstName, lastName, email, password, is_verified, verification_token) VALUES (?, ?, ?, ?, ?, ?)";
          
         if ($stmt = $conn->prepare($sql)) {
             // Bind variables to the prepared statement as parameters
-            $stmt->bind_param("ssss", $param_firstname, $param_lastname, $param_email, $param_password);
+            $stmt->bind_param("ssssis", $param_firstname, $param_lastname, $param_email, $param_password, $is_verified, $verification_token);
             
             // Set parameters
             $param_firstname = $firstName;
@@ -155,10 +160,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             if ($stmt->execute()) {
                 $new_user_id = $stmt->insert_id;
                 // Log successful registration
-                log_activity($new_user_id, 'Registration', 'New user registered.');
+                log_activity($new_user_id, 'Registration', 'New user registered and verification email sent.');
                 
-                // Redirect to login page
-                header("location: login.php");
+                // Send the verification email using PHPMailer
+                if (sendVerificationEmail($email, $firstName, $verification_token)) {
+                    // Redirect to login page with a success message
+                    $_SESSION['signup_success'] = "Registration successful! Please check your email (and spam folder) to verify your account before logging in.";
+                    header("location: login.php");
+                    exit;
+                } else {
+                    $signup_err = "Account created but failed to send verification email. Please contact support.";
+                }
             } else {
                 $signup_err = "Something went wrong. Please try again later.";
             }
@@ -258,7 +270,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     }        
                     ?>
                     
-                    <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
+                    <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post" id="signupForm">
                         
                         <!-- Name Row -->
                         <div class="name-row">
@@ -350,7 +362,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         </div>
                         
                         <div class="form-group">
-                            <button type="submit" class="btn btn-primary btn-signup w-100">Create Account</button>
+                            <button type="submit" class="btn btn-primary btn-signup w-100" id="signupBtn">Create Account</button>
                         </div>
                         
                         <div class="form-divider">Or</div>
@@ -518,6 +530,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     if (termsModal) termsModal.hide();
                 });
             }
+        });
+
+        document.getElementById('signupForm').addEventListener('submit', function() {
+            var btn = document.getElementById('signupBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Creating Account...';
         });
     </script>
 

@@ -97,7 +97,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 UPDATE book_rentals r
                 JOIN book_returns br ON r.rental_id = br.rental_id
                 SET 
-                    r.status = 'returned', 
                     r.return_date = NOW(),
                     r.book_condition = ?,
                     r.late_fee = ?
