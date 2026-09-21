@@ -1,0 +1,52 @@
+================================================================================
+                    DATABASE SETUP & IMPORT INSTRUCTIONS
+================================================================================
+Project:   BookWagon (IAS 2)
+Database:  bookwagon_db
+Server:    MySQL / MariaDB (XAMPP)
+
+--------------------------------------------------------------------------------
+1. CHOOSE YOUR DATABASE FILE TO IMPORT (CHOOSE ONE)
+--------------------------------------------------------------------------------
+
+OPTION A: bookwagon_db.sql (RECOMMENDED FOR EVALUATION)
+--------------------------------------------------------------------------------
+- Contains all 31 tables, foreign keys, and autonomous security triggers.
+- Pre-populated with complete catalog books, seller shop profiles, ratings,
+  and demo orders matching the files in the uploads/ directory.
+- Ideal for quick evaluation: allows immediate testing of browsing, renting,
+  messaging, and dispute moderation without setting up items first.
+
+OPTION B: bookwagon_db_clean.sql (CLEAN STARTER DATABASE)
+--------------------------------------------------------------------------------
+- Contains the exact same 31 tables and autonomous security triggers.
+- Clean slate with baseline seed accounts (Admin, Demo Seller, Demo Buyer) and 
+  5 sample books, but ZERO past order clutter or test chat logs.
+- Ideal for testing fresh account registration, new book listing uploads, and
+  fresh transaction handovers from scratch.
+
+*(Note: Both files automatically create the `bookwagon_db` database if it does
+ not already exist).*
+
+--------------------------------------------------------------------------------
+2. STEP-BY-STEP IMPORT VIA PHPMYADMIN
+--------------------------------------------------------------------------------
+Step 1: Open the XAMPP Control Panel.
+Step 2: Start the "Apache" and "MySQL" modules.
+Step 3: Open your web browser and go to:
+        http://localhost/phpmyadmin/
+Step 4: Click the "Import" tab on the top navigation bar.
+Step 5: Under "File to import", click "Choose File" and select either:
+        bookwagon_db.sql (Recommended) OR bookwagon_db_clean.sql
+Step 6: Scroll to the bottom and click "Import" (or "Go").
+Step 7: Verify that "Import has been successfully finished" appears.
+
+--------------------------------------------------------------------------------
+3. TEST CREDENTIALS (INCLUDED IN BOTH DATABASES)
+--------------------------------------------------------------------------------
+Role                   Username / Email           Password     Notes
+---------------------  -------------------------  -----------  --------------------
+Administrator          admin                      123456789    Full Admin portal
+Verified Seller        seller@bookwagon.com       123456789    2FA Bypassed for demo
+Student / Renter       user@bookwagon.com         123456789    Preloaded ₱2,500
+================================================================================

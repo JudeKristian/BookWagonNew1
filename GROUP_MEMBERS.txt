@@ -1,0 +1,73 @@
+================================================================================
+                           PROJECT SUBMISSION DETAILS
+================================================================================
+
+PROJECT TITLE:
+BookWagon: A Secure Web-Based Platform for Sustainable Book Rental and Resale
+
+COURSE & SUBJECT:
+Information Assurance and Security 2 (IAS 2)
+
+SUBMITTED TO:
+Instructor Iluminado Canoy
+
+SUBMITTED BY (GROUP 5 MEMBERS):
+1. Abdillah, Alfaidz
+2. Arig, Reynald
+3. Larroza, Jude Kristian
+
+SUBMISSION DATE:
+September 2026
+
+================================================================================
+SYSTEM & ENVIRONMENT SPECIFICATIONS
+================================================================================
+Platform / Server:  Apache 2.4 (XAMPP)
+Runtime / Backend:  PHP 8.1+ / 8.2
+Database Engine:    MySQL / MariaDB
+Database Name:      bookwagon_db
+
+Available Database Import Options:
+- Option A (Recommended): DATABASE/bookwagon_db.sql       (Full Populated Demo DB)
+- Option B (Clean Slate):  DATABASE/bookwagon_db_clean.sql (Clean Starter DB)
+
+================================================================================
+DEFAULT TEST ACCOUNTS FOR EVALUATION
+================================================================================
+All test accounts are pre-configured in the database for instant evaluation:
+
+1. SYSTEM ADMINISTRATOR PORTAL:
+   - URL:       http://localhost/BookwagonNew1/Admin/
+   - Username:  admin
+   - Password:  123456789
+   - Features:  Audit Logs, Intrusion Detection Alerts, Seller Verification, 
+                Product Approvals, Damage Disputes & Escrow Settlements
+
+2. DEMO VERIFIED SELLER:
+   - URL:       http://localhost/BookwagonNew1/login.php
+   - Email:     seller@bookwagon.com
+   - Password:  123456789
+   - 2FA:       Disabled for evaluation (instant login)
+   - Store:     BookWagon Official Store (verified)
+
+3. DEMO BUYER / STUDENT (PRE-LOADED ESCROW WALLET):
+   - URL:       http://localhost/BookwagonNew1/login.php
+   - Email:     user@bookwagon.com
+   - Password:  123456789
+   - 2FA:       Disabled for evaluation (instant login)
+   - Balance:   ₱2,500.00 pre-loaded for testing rentals and purchases
+
+4. ALTERNATE TEST ACCOUNTS (in bookwagon_db.sql):
+   - Seller:    arielfranco8868@gmail.com  /  123456
+   - Buyer:     sss@gmail.com              /  123456
+
+================================================================================
+INCLUDED DELIVERABLES IN THIS SUBMISSION
+================================================================================
+1. Complete System Source Code (Vanilla PHP, CSS, JS, Assets, Uploads)
+2. Database Schema & Options (bookwagon_db.sql & bookwagon_db_clean.sql)
+3. Complete Project Documentation PDF (GROUP5_FINAL DOCUMENTATION.pdf)
+4. Evaluator Quick Start & Testing Walkthrough (QUICK_START_GUIDE.txt)
+5. Presentation Slides (FINAL PRESENTATION.pdf)
+6. High-Resolution Standalone Diagrams (ERD, Flowchart, Architecture, Use Cases)
+================================================================================

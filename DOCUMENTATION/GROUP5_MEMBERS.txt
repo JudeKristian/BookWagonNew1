@@ -1,0 +1,64 @@
+================================================================================
+                           PROJECT SUBMISSION DETAILS
+================================================================================
+
+PROJECT TITLE:
+BookWagon: A Secure Web-Based Platform for Sustainable Book Rental and Resale
+
+COURSE & SUBJECT:
+Information Assurance and Security 2 (IAS 2)
+
+SUBMITTED TO:
+Instructor Iluminado Canoy
+
+SUBMITTED BY (GROUP MEMBERS):
+1. Abdillah, Alfaidz
+2. Arig, Reynald
+3. Larroza, Jude Kristian
+
+SUBMISSION DATE:
+September 2026
+
+================================================================================
+SYSTEM & ENVIRONMENT SPECIFICATIONS
+================================================================================
+Platform / Server:  Apache 2.4 (XAMPP)
+Runtime / Backend:  PHP 8.1+ / 8.2
+Database:           MySQL / MariaDB
+Database Name:      bookwagon_db
+Starter SQL File:   DATABASE/bookwagon_db.sql
+
+================================================================================
+DEFAULT TEST ACCOUNTS FOR EVALUATION
+================================================================================
+All test accounts are pre-configured in the database for instant evaluation:
+
+1. SYSTEM ADMINISTRATOR PORTAL:
+   - URL:       http://localhost/BookwagonNew1/Admin/
+   - Username:  admin
+   - Password:  123456789
+   - Features:  Audit Logs, Intrusion Alerts, Seller Verification, 
+                Product Approvals, Disputes & Escrow Payouts
+
+2. DEMO SELLER (APPROVED STORE):
+   - URL:       http://localhost/BookwagonNew1/login.php
+   - Email:     seller@bookwagon.com
+   - Password:  123456789
+   - 2FA:       Disabled for evaluation (instant login)
+   - Store:     BookWagon Official Store (verified)
+
+3. DEMO BUYER / STUDENT (PRE-LOADED ESCROW WALLET):
+   - URL:       http://localhost/BookwagonNew1/login.php
+   - Email:     user@bookwagon.com
+   - Password:  123456789
+   - 2FA:       Disabled for evaluation (instant login)
+   - Balance:   ₱2,500.00 pre-loaded for renting and purchasing tests
+
+================================================================================
+INCLUDED DELIVERABLES IN THIS SUBMISSION
+================================================================================
+1. Complete System Source Code (Vanilla PHP, CSS, JS, Assets, Uploads)
+2. Database Schema and Clean Seed Data (bookwagon_db_clean.sql)
+3. Complete Project Documentation PDF (GROUP5_FINAL DOCUMENTATION.pdf)
+4. Evaluator Quick Start & Testing Guide (QUICK_START_GUIDE.txt)
+================================================================================

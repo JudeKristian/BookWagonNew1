@@ -13,9 +13,10 @@ strip_inserts.py
 *.log
 *.tmp
 
-# SQL dump files (Include ONLY clean starter database for GitHub, exclude live database dumps)
+# SQL dump files (Include clean starter and populated database for GitHub)
 *.sql
 !databases/bookwagon_db_clean.sql
+!databases/bookwagon_db.sql
 
 # OS files
 .DS_Store

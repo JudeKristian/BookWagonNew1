@@ -1,0 +1,144 @@
+================================================================================
+                    BOOKWAGON — QUICK START & EVALUATION GUIDE
+================================================================================
+Course:    Information Assurance and Security 2 (IAS 2)
+Project:   BookWagon: Sustainable Book Rental, Resale & Barter Swapping Platform
+Group 5:   Abdillah, Alfaidz | Arig, Reynald | Larroza, Jude Kristian
+Evaluator: Instructor Iluminado Canoy
+Date:      September 2026
+
+================================================================================
+1. PREREQUISITES & ENVIRONMENT
+================================================================================
+1. Ensure XAMPP is installed (with Apache 2.4 and PHP 8.1+ / 8.2).
+2. Place this project folder into your XAMPP htdocs directory:
+   C:\xampp\htdocs\BookwagonNew1\
+3. Open XAMPP Control Panel and START both:
+   [✓] Apache
+   [✓] MySQL
+
+================================================================================
+2. DATABASE SETUP — CHOOSE YOUR PREFERRED OPTION
+================================================================================
+1. Open your web browser and navigate to:
+   http://localhost/phpmyadmin/
+2. Click the "Import" tab at the top.
+3. Click "Choose File" and select ONE of the two database options:
+
+   ▶ OPTION A (RECOMMENDED FOR QUICK EVALUATION):
+     DATABASE/bookwagon_db.sql
+     - Full populated database: All 31 tables, triggers, pre-seeded accounts,
+       complete catalog listings, seller store profiles, reviews, and test orders.
+     - Best for: Immediate testing of browsing, renting, chatting, and dispute
+       resolution without manually entering products first.
+
+   ▶ OPTION B (CLEAN STARTER SLATE):
+     DATABASE/bookwagon_db_clean.sql
+     - Clean starter database: Same 31 tables and triggers, clean seed accounts,
+       and 5 baseline books with ZERO past order clutter or test chat logs.
+     - Best for: Testing brand new account registration, fresh book uploads,
+       and clean handover transactions from scratch.
+
+4. Scroll down and click "Import" (or "Go").
+   *(Both SQL files automatically create `bookwagon_db` if it doesn't exist).*
+
+================================================================================
+3. SYSTEM URLS & EVALUATION TEST CREDENTIALS
+================================================================================
+Marketplace Portal (User & Seller):
+   URL:       http://localhost/BookwagonNew1/
+   Login:     http://localhost/BookwagonNew1/login.php
+
+System Administrator Portal:
+   URL:       http://localhost/BookwagonNew1/Admin/
+   Login:     http://localhost/BookwagonNew1/Admin/Index.php
+
+--------------------------------------------------------------------------------
+Pre-configured Evaluation Accounts (2FA Bypassed for Instant Testing):
+--------------------------------------------------------------------------------
+Role              Email / Username         Password    Notes
+----------------  -----------------------  ----------  -------------------------
+System Admin      admin                    123456789   Full root administrative access
+Verified Seller   seller@bookwagon.com     123456789   Official BookWagon store
+Student Buyer     user@bookwagon.com       123456789   Pre-loaded ₱2,500 wallet
+Alternate Seller  arielfranco8868@gmail.com 123456     Verified store (in Option A)
+Alternate Buyer   sss@gmail.com            123456      Student buyer (in Option A)
+
+================================================================================
+4. RECOMMENDED 5-MINUTE EVALUATION WALKTHROUGH
+================================================================================
+
+SCENARIO 1: Renting a Book with Escrow Protection
+1. Log in as Student Buyer (user@bookwagon.com / 123456789).
+2. Browse catalog at http://localhost/BookwagonNew1/rentbooks.php
+3. Select a book (e.g. "Clean Code" or "Atomic Habits") and click "Rent Now".
+4. Choose duration (e.g. 2 weeks) and confirm.
+5. The system automatically places the rental fee and the refundable security
+   deposit into platform escrow.
+
+SCENARIO 2: Dual-Party QR Handover & Non-Repudiation
+1. Log in as Seller (seller@bookwagon.com / 123456789) in another browser/tab.
+2. Go to Seller Dashboard -> Rented Books (http://localhost/BookwagonNew1/rented_books.php).
+3. Under the active rental, click "Handover".
+4. Upload a baseline meetup condition photo and display the dynamic QR Code.
+5. On the Buyer side, confirm condition and scan/verify the QR code.
+   The transaction timestamp locks, eliminating pre-existing damage arguments.
+
+SCENARIO 3: Return Approval & Automated Deposit Refund
+1. When the rental period concludes, the seller inspects the book.
+2. If undamaged, seller clicks "Approve Return".
+3. The system automatically refunds 100% of the security deposit back to the 
+   buyer's wallet, and releases rental earnings to the seller.
+
+SCENARIO 4: Damage Dispute & Administrative Photo Arbitration
+1. If the book is returned damaged, the seller files a damage claim with a photo.
+2. Log in as Admin (admin / 123456789) and visit:
+   http://localhost/BookwagonNew1/Admin/admin_disputes.php
+3. Admin compares the Pre-Handover Photo vs. Post-Return Photo side-by-side
+   and issues a binding resolution (Full Refund, Partial Deduction, or Forfeit).
+
+SCENARIO 5: Autonomous Database Intrusion Detection Triggers
+1. Open Admin Portal (http://localhost/BookwagonNew1/Admin/) and view dashboard.
+2. Open phpMyAdmin and tamper directly with a user's wallet balance:
+   UPDATE users SET wallet_balance = 999999.00 WHERE id = 2;
+3. Refresh the Admin Dashboard: The autonomous MariaDB trigger immediately flags 
+   the unauthorized change with a RED "RISK: DIRECT_WALLET_TAMPERING" banner.
+4. Click "SOLVE", enter incident notes, and resolve the threat.
+
+================================================================================
+5. PROJECT SUBMISSION DELIVERABLES STRUCTURE
+================================================================================
+BookWagon_Final_Submission/
+│
+├── GROUP_MEMBERS.txt                     <-- Student & course info
+├── QUICK_START_GUIDE.txt                 <-- This evaluation guide
+├── README.md                             <-- Complete project & IAS 2 overview
+│
+├── DOCUMENTATION/                        <-- Formal academic documentation
+│   ├── GROUP5_FINAL DOCUMENTATION.pdf    <-- Full 16-page project document
+│   ├── FINAL PRESENTATION.pdf            <-- Presentation slide deck
+│   ├── GROUP5_MEMBERS.txt                <-- Member profiles
+│   └── DIAGRAMS/                         <-- Standalone high-res vector/image diagrams
+│       ├── ERD FINAL.pdf & .png
+│       ├── FLOWCHART.drawio.pdf & .png
+│       ├── SYSTEM ARCHITECTURE DIAGRAM.png
+│       └── USE CASE DIAGRAM.png
+│
+├── DATABASE/                             <-- SQL database options
+│   ├── bookwagon_db.sql                  <-- Option A: Populated demo database
+│   ├── bookwagon_db_clean.sql            <-- Option B: Clean starter database
+│   └── DATABASE_IMPORT_INSTRUCTIONS.txt  <-- phpMyAdmin import steps
+│
+└── SOURCE_CODE/                          <-- Complete application source code
+    ├── Admin/                            <-- Administrator portal
+    ├── ajax_handlers/                    <-- AJAX handlers
+    ├── api/                              <-- Book swap & logistics APIs
+    ├── css/                              <-- Styling
+    ├── js/                               <-- Client-side logic
+    ├── images/                           <-- Static assets
+    ├── include/                          <-- Reusable UI templates
+    ├── includes/                         <-- Security backends (mailer, 2FA, logger)
+    ├── uploads/                          <-- Book images and condition photos
+    ├── connect.php                       <-- Database connection
+    └── *.php                             <-- All application endpoints
+================================================================================
